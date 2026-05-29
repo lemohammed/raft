@@ -2318,7 +2318,36 @@ fn cmd_search(root: &Path, args: SearchArgs) -> Result<()> {
         optional_target_room(args.conversation.as_deref(), args.channel.as_deref())?;
     let cutoff = args.since.as_deref().map(parse_since_cutoff).transpose()?;
     ensure_root(root)?;
-    let mut rows = visible_messages(root, &agent_id, conversation_id.as_deref())?
+    let candidates = visible_messages(root, &agent_id, conversation_id.as_deref())?;
+    // A `*` broadcast is addressed to every participant, so `--mentions <id>`
+    // should surface it for any member of that room — matching how
+    // `message_visible_to` treats `*` as reaching all participants. Without
+    // this, an agent searching `--mentions me` silently missed every broadcast
+    // it had actually received. Resolve membership per conversation once.
+    let mention_wildcard_convs: BTreeSet<String> = match mentions.as_deref() {
+        Some(who) => {
+            let mut convs = BTreeSet::new();
+            let mut seen = BTreeSet::new();
+            for message in &candidates {
+                if message.to.iter().any(|recipient| recipient == "*")
+                    && seen.insert(message.conversation_id.clone())
+                {
+                    let meta: Option<Meta> = read_json(
+                        &conversation_path(root, &message.conversation_id)?.join("meta.json"),
+                    )?;
+                    if meta
+                        .map(|meta| meta.participants.iter().any(|item| item == who))
+                        .unwrap_or(false)
+                    {
+                        convs.insert(message.conversation_id.clone());
+                    }
+                }
+            }
+            convs
+        }
+        None => BTreeSet::new(),
+    };
+    let mut rows = candidates
         .into_iter()
         .filter(|message| {
             cutoff
@@ -2337,6 +2366,8 @@ fn cmd_search(root: &Path, args: SearchArgs) -> Result<()> {
                 .map(|who| {
                     message.mentions.iter().any(|m| m == who)
                         || message.to.iter().any(|t| t == who)
+                        || (message.to.iter().any(|recipient| recipient == "*")
+                            && mention_wildcard_convs.contains(&message.conversation_id))
                 })
                 .unwrap_or(true)
         })

@@ -519,7 +519,8 @@ raft gc --archive
 (`--from`, `--kind`, `--mentions`, `--since`, `--conversation`/`--channel`)
 that combine conjunctively. At least one criterion is required so the command
 never dumps the whole bus by accident; `--mentions` matches both `@mentions`
-and `to[]` recipients.
+and `to[]` recipients, and a `*` broadcast counts as reaching every member of
+its room (so `--mentions me` surfaces broadcasts you received).
 
 See [AGENTS.md](./AGENTS.md) for operating rules and
 [docs/protocol.md](./docs/protocol.md) for the on-disk protocol.

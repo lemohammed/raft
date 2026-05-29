@@ -11,6 +11,14 @@ shell out to `raft` can branch on results reliably.
 
 ### Fixed
 
+- `search --mentions <id>` now matches `*` broadcasts. The filter compared the
+  target only against literal `mentions[]`/`to[]` entries, but a message sent to
+  `*` reaches every room member (and `message_visible_to` treats it that way),
+  so an agent running `search --mentions me` silently missed every broadcast it
+  had actually received — the opposite of the documented "matches both
+  @mentions and to[] recipients". A `*` recipient now counts as reaching the
+  target when the target is a participant of that conversation (membership is
+  resolved per room, so a non-member is not spuriously matched).
 - `thread --limit` now keeps the *newest* messages instead of the oldest. The
   renderer walked the `after` tree depth-first decrementing a shared budget, so
   once the limit was hit it dropped the highest-id (most recent) replies and

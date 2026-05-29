@@ -3348,6 +3348,48 @@ fn search_filters_by_from_kind_and_mentions() {
 }
 
 #[test]
+fn search_mentions_matches_wildcard_broadcasts_to_room_members() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(&bus, &["claim", "alice", "--workspace", "."]);
+    run(&bus, &["claim", "bob", "--workspace", "."]);
+    run(
+        &bus,
+        &[
+            "conversation", "create", "c", "--participants", "alice,bob",
+            "--starter", "alice",
+        ],
+    );
+    // Alice broadcasts to the whole room with `*`; bob is never named literally.
+    let sent = run(
+        &bus,
+        &[
+            "send", "--conversation", "c", "--from", "alice", "--to", "*",
+            "--subject", "all-hands", "--body", "standup in 5",
+        ],
+    );
+    let broadcast_id = String::from_utf8_lossy(&sent.stdout).trim().to_string();
+
+    let ids = |out: &std::process::Output| -> Vec<String> {
+        serde_json::from_slice::<Vec<serde_json::Value>>(&out.stdout)
+            .unwrap()
+            .into_iter()
+            .map(|m| m["id"].as_str().unwrap().to_string())
+            .collect()
+    };
+
+    // `--mentions bob` surfaces the broadcast even though bob is only reached
+    // via `*`, because bob is a participant of the room.
+    let for_bob = run(&bus, &["search", "--agent", "alice", "--mentions", "bob", "--json"]);
+    assert_eq!(ids(&for_bob), vec![broadcast_id.clone()]);
+
+    // A non-member is not surfaced by the wildcard expansion.
+    let for_ghost =
+        run(&bus, &["search", "--agent", "alice", "--mentions", "ghost", "--json"]);
+    assert!(ids(&for_ghost).is_empty());
+}
+
+#[test]
 fn open_asks_report_whether_the_awaited_agent_is_live() {
     let bus = temp_bus();
     run(&bus, &["init"]);
