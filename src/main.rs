@@ -1,5 +1,8 @@
+#[macro_use]
+mod error;
 mod ui_html;
 
+use crate::error::{RaftError, Result};
 use crate::ui_html::UI_HTML;
 use chrono::{DateTime, SecondsFormat, TimeDelta, Utc};
 use clap::{Args, Parser, Subcommand};
@@ -29,37 +32,6 @@ const LOCK_TTL_SECONDS: u64 = 30;
 const LOCK_TIMEOUT_SECONDS: u64 = 5;
 const SERVE_LOCK_TTL_SECONDS: u64 = 30;
 const SCHEMA_VERSION: u16 = 1;
-
-type Result<T> = std::result::Result<T, RaftError>;
-
-#[derive(Debug)]
-struct RaftError(String);
-
-impl std::fmt::Display for RaftError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-impl std::error::Error for RaftError {}
-
-impl From<io::Error> for RaftError {
-    fn from(value: io::Error) -> Self {
-        Self(value.to_string())
-    }
-}
-
-impl From<serde_json::Error> for RaftError {
-    fn from(value: serde_json::Error) -> Self {
-        Self(value.to_string())
-    }
-}
-
-macro_rules! bail {
-    ($($arg:tt)*) => {
-        return Err(RaftError(format!($($arg)*)))
-    };
-}
 
 #[derive(Parser)]
 #[command(name = "raft")]
