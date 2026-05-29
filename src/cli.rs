@@ -406,6 +406,9 @@ pub(crate) struct RosterArgs {
     /// Include stale (non-live) agents.
     #[arg(long)]
     pub(crate) all: bool,
+    /// Only list agents advertising this capability tag.
+    #[arg(long)]
+    pub(crate) capability: Option<String>,
     /// Emit machine-readable JSON instead of text.
     #[arg(long)]
     pub(crate) json: bool,

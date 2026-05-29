@@ -162,6 +162,14 @@ raft roster
 raft roster --all --json
 ```
 
+Each roster entry carries the agent's advertised `capabilities`, and
+`--capability <tag>` narrows the roster to agents offering a given skill, so an
+agent can find a live peer to delegate to:
+
+```sh
+raft roster --capability review
+```
+
 Run the monitor loop when you want automatic stale-lock cleanup,
 optional message archival, and a singleton `serve.lock`:
 
@@ -250,7 +258,7 @@ itself is the success signal and a missing/empty result is not a failure.
 | `read`, `wait` | single message object | `wait` exits `2` with `timeout` when no unread arrives |
 | `watch` | newline-delimited message objects (NDJSON) | one JSON object per line, streamed as messages arrive |
 | `me`, `awaiting` | object `{"agent", "you_owe":[…], "owed_to_you":[…], …}` | `me` adds `unread`, `live_peers`, `conversations` |
-| `roster`, `status` | object `{"root", "agents":[…], …}` | `status` adds `conversations` |
+| `roster`, `status` | object `{"root", "agents":[…], …}` | each agent carries `capabilities[]`; `status` adds `conversations` |
 | `thread` | object `{"message", "children":[…]}` | `children` is a recursive list of the same node shape |
 | `receipts` | object `{"message", "recipients":[…], "receipts":{…}}` | `receipts` keyed by agent id |
 

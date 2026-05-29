@@ -2341,3 +2341,34 @@ fn channel_list_reports_membership_and_unread() {
     assert_eq!(ops["joined"], false);
     assert_eq!(ops["unread"], 0);
 }
+
+#[test]
+fn roster_exposes_capabilities_and_filters_by_them() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(
+        &bus,
+        &["claim", "alice", "--workspace", ".", "--capabilities", "review,docs"],
+    );
+    run(
+        &bus,
+        &[
+            "claim", "bob", "--workspace", ".", "--capabilities", "implementation,tests",
+        ],
+    );
+
+    // Every agent carries its capability tags in the roster.
+    let all = run(&bus, &["roster", "--json"]);
+    let all_json: serde_json::Value = serde_json::from_slice(&all.stdout).unwrap();
+    let agents = all_json["agents"].as_array().unwrap();
+    assert_eq!(agents.len(), 2);
+    let alice = agents.iter().find(|a| a["id"] == "alice").unwrap();
+    assert_eq!(alice["capabilities"], serde_json::json!(["review", "docs"]));
+
+    // --capability narrows to agents advertising the tag.
+    let filtered = run(&bus, &["roster", "--capability", "tests", "--json"]);
+    let filtered_json: serde_json::Value = serde_json::from_slice(&filtered.stdout).unwrap();
+    let filtered_agents = filtered_json["agents"].as_array().unwrap();
+    assert_eq!(filtered_agents.len(), 1);
+    assert_eq!(filtered_agents[0]["id"], "bob");
+}

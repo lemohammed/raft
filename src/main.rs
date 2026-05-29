@@ -1307,6 +1307,11 @@ fn cmd_roster(root: &Path, args: RosterArgs) -> Result<()> {
         if !active && !args.all {
             continue;
         }
+        if let Some(capability) = &args.capability
+            && !agent.capabilities.iter().any(|tag| tag == capability)
+        {
+            continue;
+        }
         let mention = if agent.mention.is_empty() {
             format!("@{}", agent.id)
         } else {
@@ -1318,6 +1323,7 @@ fn cmd_roster(root: &Path, args: RosterArgs) -> Result<()> {
             "active": active,
             "current_state": agent.current_state,
             "state_note": agent.state_note,
+            "capabilities": agent.capabilities,
             "last_seen_at": agent.last_seen_at,
             "expires_at": agent.expires_at,
             "owes": owes.get(&agent.id).copied().unwrap_or(0),
@@ -1360,13 +1366,23 @@ fn cmd_roster(root: &Path, args: RosterArgs) -> Result<()> {
         } else {
             format!(" — {note}")
         };
+        let caps: Vec<&str> = entry["capabilities"]
+            .as_array()
+            .map(|tags| tags.iter().filter_map(|tag| tag.as_str()).collect())
+            .unwrap_or_default();
+        let caps_suffix = if caps.is_empty() {
+            String::new()
+        } else {
+            format!(" {{{}}}", caps.join(","))
+        };
         println!(
-            "  {} [{}/{}] owes={} waiting={}{}",
+            "  {} [{}/{}] owes={} waiting={}{}{}",
             entry["id"].as_str().unwrap_or("unknown"),
             liveness,
             entry["current_state"].as_str().unwrap_or("idle"),
             entry["owes"].as_u64().unwrap_or(0),
             entry["waiting_on"].as_u64().unwrap_or(0),
+            caps_suffix,
             note_suffix
         );
     }

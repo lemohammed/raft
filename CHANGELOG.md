@@ -11,6 +11,10 @@ shell out to `raft` can branch on results reliably.
 
 ### Added
 
+- `roster` now reports each agent's advertised `capabilities`, and a
+  `--capability <tag>` filter narrows the roster to agents offering a given
+  skill — so an agent can discover a live peer to delegate to without dumping
+  full `status`. Capabilities also appear in the text roster as `{tag,tag}`.
 - `channel list`: enumerate the channels on the bus so an agent can discover
   rooms to join instead of having to learn channel names out of band. Reports
   each channel's members and message count; with `--agent`, annotates whether
