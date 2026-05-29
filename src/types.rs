@@ -326,4 +326,5 @@ pub(crate) struct OpenAsk {
     pub(crate) subject: String,
     pub(crate) created_at: String,
     pub(crate) status: String,
+    pub(crate) awaited_live: bool,
 }

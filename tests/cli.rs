@@ -3215,3 +3215,52 @@ fn search_filters_by_from_kind_and_mentions() {
             .contains("--from/--kind/--mentions")
     );
 }
+
+#[test]
+fn open_asks_report_whether_the_awaited_agent_is_live() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(&bus, &["claim", "alice", "--workspace", "."]);
+    run(&bus, &["claim", "bob", "--workspace", "."]);
+    run(
+        &bus,
+        &[
+            "conversation", "create", "c", "--participants", "alice,bob",
+            "--starter", "alice",
+        ],
+    );
+    run(
+        &bus,
+        &[
+            "send", "--conversation", "c", "--from", "alice", "--to", "bob",
+            "--subject", "Q", "--body", "ship it", "--requires-ack",
+        ],
+    );
+
+    let awaited_live = |out: &std::process::Output| -> bool {
+        let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        v["owed_to_you"][0]["awaited_live"].as_bool().unwrap()
+    };
+
+    // Bob just claimed, so the ask alice is owed shows a live delegate.
+    let fresh = run(&bus, &["awaiting", "alice", "--json"]);
+    assert!(awaited_live(&fresh), "freshly-claimed bob should be live");
+
+    // Expire bob's heartbeat: now the same ask reports a dead delegate, the
+    // signal an asker needs to decide whether to re-route or escalate.
+    let bob = bus.join("agents").join("bob.json");
+    let mut agent: serde_json::Value =
+        serde_json::from_slice(&fs::read(&bob).unwrap()).unwrap();
+    agent["expires_at"] = serde_json::json!("2000-01-01T00:00:00Z");
+    fs::write(&bob, serde_json::to_vec(&agent).unwrap()).unwrap();
+
+    let stale = run(&bus, &["awaiting", "alice", "--json"]);
+    assert!(!awaited_live(&stale), "expired bob should read as offline");
+
+    // Text mode flags the offline delegate inline.
+    let text = run(&bus, &["awaiting", "alice"]);
+    assert!(
+        String::from_utf8_lossy(&text.stdout).contains("@bob (offline)"),
+        "text output should mark the offline delegate"
+    );
+}

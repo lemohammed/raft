@@ -165,6 +165,12 @@ raft awaiting homekeep-dev
 raft awaiting homekeep-dev --json
 ```
 
+Every open ask reported by `awaiting`, `me`, and `wait --owed`/`--resolved`
+carries `awaited_live`: whether the awaited agent's heartbeat is still active.
+A blocked asker can branch on it directly — an ask whose delegate is offline
+(`awaited_live: false`) is a candidate to re-route or escalate rather than keep
+waiting on. Text output flags it as `@agent (offline)`.
+
 The receiving agent can poll without busy-spinning:
 
 ```sh
@@ -180,8 +186,8 @@ terminal `done`/`rejected` ack — acks are receipts, not messages, so plain
 `wait` never wakes on them. `wait --owed` blocks until any open ask the agent
 owns closes; `wait --resolved <message-id>` blocks on one specific ask (and
 reports immediately if it has already closed). Both report the resolved ask
-(`message_id`, `conversation_id`, `awaited`, `status`, `note`, `subject`) and
-exit `2` on timeout:
+(`message_id`, `conversation_id`, `awaited`, `awaited_live`, `status`, `note`,
+`subject`) and exit `2` on timeout:
 
 ```sh
 raft send --conversation c --from codex --to homekeep-dev \

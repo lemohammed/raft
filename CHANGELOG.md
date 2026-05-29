@@ -11,6 +11,14 @@ shell out to `raft` can branch on results reliably.
 
 ### Added
 
+- Open asks now carry `awaited_live`, the awaited agent's heartbeat liveness,
+  everywhere they surface (`awaiting`, `me`'s `you_owe`/`owed_to_you`, and the
+  `wait --owed`/`--resolved` resolution envelope). An agent blocked waiting on a
+  delegate previously had to join its `owed_to_you` list against `me`'s separate
+  `live_peers` in the shell to answer the one question that decides whether to
+  escalate: "is my delegate dead, or just slow?" The signal is now inline — a
+  `done` that will never come because the worker's process exited reads as
+  `awaited_live: false`, and text output flags it as `@agent (offline)`.
 - `search` gained structured filters — `--from`, `--kind`, and `--mentions` —
   that combine conjunctively with the existing substring pattern and
   `--since`/`--conversation`/`--channel`/`--limit`. The pattern is now optional,

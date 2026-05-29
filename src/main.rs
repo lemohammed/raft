@@ -1246,11 +1246,34 @@ fn message_awaited(message: &Message, meta: &Meta) -> Vec<String> {
         .collect()
 }
 
+/// Ids of agents whose heartbeat has not yet expired, scanned once so callers
+/// can join liveness onto other records without re-reading each agent file.
+pub(crate) fn live_agent_ids(root: &Path) -> Result<BTreeSet<String>> {
+    let now = Utc::now();
+    let mut live = BTreeSet::new();
+    for entry in sorted_read_dir(&root.join("agents"))? {
+        if entry.path().extension() != Some(OsStr::new("json")) {
+            continue;
+        }
+        let Some(agent): Option<Agent> = read_json(&entry.path())? else {
+            continue;
+        };
+        if parse_time(&agent.expires_at)
+            .map(|expires_at| expires_at >= now)
+            .unwrap_or(false)
+        {
+            live.insert(agent.id);
+        }
+    }
+    Ok(live)
+}
+
 pub(crate) fn gather_open_asks(
     root: &Path,
     only_conversation: Option<&str>,
     participant: Option<&str>,
 ) -> Result<Vec<OpenAsk>> {
+    let live = live_agent_ids(root)?;
     let mut asks = Vec::new();
     for entry in sorted_read_dir(&root.join("conversations"))? {
         let conv = entry.path();
@@ -1290,6 +1313,7 @@ pub(crate) fn gather_open_asks(
                 if status.as_deref().map(ask_is_terminal).unwrap_or(false) {
                     continue;
                 }
+                let awaited_live = live.contains(&who);
                 asks.push(OpenAsk {
                     conversation_id: meta.id.clone(),
                     message_id: message.id.clone(),
@@ -1298,6 +1322,7 @@ pub(crate) fn gather_open_asks(
                     subject: message.subject.clone(),
                     created_at: message.created_at.clone(),
                     status: status.unwrap_or_else(|| "none".to_string()),
+                    awaited_live,
                 });
             }
         }
@@ -1347,9 +1372,10 @@ fn cmd_awaiting(root: &Path, args: AwaitingArgs) -> Result<()> {
         println!("  nothing");
     }
     for ask in &outgoing {
+        let presence = if ask.awaited_live { "" } else { " (offline)" };
         println!(
-            "  {} in {} -> @{} [{}]: {}",
-            ask.message_id, ask.conversation_id, ask.awaited, ask.status, ask.subject
+            "  {} in {} -> @{}{} [{}]: {}",
+            ask.message_id, ask.conversation_id, ask.awaited, presence, ask.status, ask.subject
         );
     }
     Ok(())
@@ -1468,9 +1494,10 @@ fn cmd_me(root: &Path, args: MeArgs) -> Result<()> {
         println!("  nothing");
     }
     for ask in &owed_to_you {
+        let presence = if ask.awaited_live { "" } else { " (offline)" };
         println!(
-            "  {} in {} -> @{} [{}]: {}",
-            ask.message_id, ask.conversation_id, ask.awaited, ask.status, ask.subject
+            "  {} in {} -> @{}{} [{}]: {}",
+            ask.message_id, ask.conversation_id, ask.awaited, presence, ask.status, ask.subject
         );
     }
     println!("live peers ({}):", live_peers.len());
@@ -1736,6 +1763,7 @@ fn emit_resolution(args: &WaitArgs, resolved: Option<(OpenAsk, Option<String>)>)
                 "message_id": ask.message_id,
                 "conversation_id": ask.conversation_id,
                 "awaited": ask.awaited,
+                "awaited_live": ask.awaited_live,
                 "status": ask.status,
                 "note": note,
                 "subject": ask.subject,
@@ -1838,6 +1866,7 @@ fn resolved_ask_already_closed(
                 subject: message.subject.clone(),
                 created_at: message.created_at.clone(),
                 status,
+                awaited_live: live_agent_ids(root)?.contains(who),
             };
             return emit_resolution(args, Some((ask, note)));
         }
