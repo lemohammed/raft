@@ -46,6 +46,13 @@ pub(crate) struct Meta {
     pub(crate) updated_at: String,
     pub(crate) retention_days: u64,
     pub(crate) rate: Rate,
+    /// When each participant joined the room, keyed by agent id. A member is
+    /// owed no unread/awaited obligation for activity predating their entry, so
+    /// a late joiner is not flooded by the historical `*` broadcast backlog.
+    /// Empty for rooms created before this field existed (legacy members are
+    /// then treated as present from the start).
+    #[serde(default)]
+    pub(crate) joined_at: BTreeMap<String, String>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]

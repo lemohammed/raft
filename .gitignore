@@ -5,6 +5,7 @@ __pycache__/
 .mypy_cache/
 target/
 tmp/
+.claude/
 run/bus/
 run/*.pid
 dist/

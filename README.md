@@ -68,6 +68,12 @@ raft channel create homekeep-main \
 raft channel join homekeep-main --agent qa-agent
 ```
 
+Joining records a membership baseline: an agent owes nothing for activity that
+predates its `joined_at`, so a late joiner sees the channel's prior history as
+read backlog rather than a wall of unread messages, and a broadcast ask sent
+before it joined never lands in its `awaiting` list. Catch-up is still
+available on demand via plain `inbox` (without `--unread`) or `show`.
+
 An agent can discover which channels exist before joining. `channel list`
 annotates each channel with its membership and (with `--agent`) whether the
 caller has joined and how many messages it has not yet read:

@@ -3915,3 +3915,81 @@ fn watch_emits_a_late_message_whose_id_sorts_below_the_cursor() {
     // And it does not re-emit the already-read high-id message.
     assert!(!out.contains(&high_id), "already-read message must not re-emit");
 }
+
+#[test]
+fn channel_joiner_is_not_flooded_with_pre_join_broadcasts() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(&bus, &["claim", "alice", "--workspace", "."]);
+    run(&bus, &["claim", "bob", "--workspace", "."]);
+    run(&bus, &["claim", "carol", "--workspace", "."]);
+    run(&bus, &["channel", "create", "general", "--creator", "alice"]);
+    run(&bus, &["channel", "join", "general", "--agent", "bob"]);
+    run(&bus, &["channel", "join", "general", "--agent", "carol"]);
+
+    // A broadcast ask to every subscriber.
+    let old = run(
+        &bus,
+        &[
+            "send", "--channel", "general", "--from", "alice", "--to", "*",
+            "--subject", "history", "--body", "ancient broadcast", "--requires-ack",
+        ],
+    );
+    let old_id = String::from_utf8_lossy(&old.stdout).trim().to_string();
+
+    // Pin the timeline on disk so membership ordering is exact rather than at
+    // the mercy of whole-second wall-clock resolution: the broadcast lands
+    // after bob joined but before carol did.
+    let meta_path = bus.join("conversations/general/meta.json");
+    let mut meta: serde_json::Value =
+        serde_json::from_slice(&fs::read(&meta_path).unwrap()).unwrap();
+    meta["joined_at"]["alice"] = serde_json::json!("2023-01-01T00:00:00Z");
+    meta["joined_at"]["bob"] = serde_json::json!("2023-01-01T00:00:00Z");
+    meta["joined_at"]["carol"] = serde_json::json!("2024-01-01T00:00:00Z");
+    fs::write(&meta_path, serde_json::to_vec(&meta).unwrap()).unwrap();
+
+    let old_path = bus.join(format!("conversations/general/messages/{old_id}.json"));
+    let mut old_msg: serde_json::Value =
+        serde_json::from_slice(&fs::read(&old_path).unwrap()).unwrap();
+    old_msg["created_at"] = serde_json::json!("2023-06-01T00:00:00Z");
+    fs::write(&old_path, serde_json::to_vec(&old_msg).unwrap()).unwrap();
+
+    // The pre-join broadcast is backlog for carol: not unread, not owed.
+    let carol_inbox = run(&bus, &["inbox", "carol", "--channel", "general", "--unread"]);
+    assert!(
+        !String::from_utf8_lossy(&carol_inbox.stdout).contains("ancient broadcast"),
+        "a late joiner must not see pre-join broadcasts as unread"
+    );
+    let carol_owes = run(&bus, &["awaiting", "carol", "--json"]);
+    let carol_owes_json: serde_json::Value = serde_json::from_slice(&carol_owes.stdout).unwrap();
+    assert!(
+        carol_owes_json["you_owe"].as_array().unwrap().is_empty(),
+        "a late joiner must owe nothing on a pre-join ask"
+    );
+
+    // Bob, present when it was sent, still sees it as unread and owed.
+    let bob_inbox = run(&bus, &["inbox", "bob", "--channel", "general", "--unread"]);
+    assert!(String::from_utf8_lossy(&bob_inbox.stdout).contains("ancient broadcast"));
+    let bob_owes = run(&bus, &["awaiting", "bob", "--json"]);
+    let bob_owes_json: serde_json::Value = serde_json::from_slice(&bob_owes.stdout).unwrap();
+    assert_eq!(bob_owes_json["you_owe"][0]["message_id"], old_id);
+
+    // A broadcast sent now (after carol's 2024 join) does reach her.
+    let fresh = run(
+        &bus,
+        &[
+            "send", "--channel", "general", "--from", "alice", "--to", "*",
+            "--subject", "now", "--body", "fresh broadcast", "--requires-ack",
+        ],
+    );
+    let fresh_id = String::from_utf8_lossy(&fresh.stdout).trim().to_string();
+    let carol_inbox2 = run(&bus, &["inbox", "carol", "--channel", "general", "--unread"]);
+    assert!(
+        String::from_utf8_lossy(&carol_inbox2.stdout).contains("fresh broadcast"),
+        "a post-join broadcast must reach the joiner as unread"
+    );
+    let carol_owes2 = run(&bus, &["awaiting", "carol", "--json"]);
+    let carol_owes2_json: serde_json::Value =
+        serde_json::from_slice(&carol_owes2.stdout).unwrap();
+    assert_eq!(carol_owes2_json["you_owe"][0]["message_id"], fresh_id);
+}

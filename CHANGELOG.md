@@ -32,6 +32,16 @@ shell out to `raft` can branch on results reliably.
 
 ### Added
 
+- Channels and conversations now record a per-member `joined_at` baseline, so a
+  late joiner is no longer flooded with the room's entire pre-join history. A
+  broadcast (`--to "*"`) is visible to every current member, and membership was
+  checked only against the *current* participant list — so on `channel join`,
+  every prior `*` message instantly became unread, and a pre-join `*` ask sent
+  with `--requires-ack` even made the new member `awaiting_me` on work it never
+  saw happen. `message_is_unread` and `message_awaited` now treat any message
+  created before a member's `joined_at` as backlog: not unread, not owed. Rooms
+  created before this field existed leave it empty, so their founding members
+  are treated as present from the start (no behavior change for old buses).
 - `read --json` now emits the viewer-relative message view (`unread`,
   `awaiting_me`, `my_status`) like `inbox`/`show`/`wait`/`watch`, instead of the
   raw message. Because a `read` receipt is non-terminal, `awaiting_me` still

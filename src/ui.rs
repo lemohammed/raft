@@ -331,8 +331,10 @@ fn join_channel(root: &Path, agent: &str, channel: &str) -> Result<()> {
         .iter()
         .any(|participant| participant == &agent_id)
     {
+        let now = iso_now();
         meta.participants.push(agent_id.clone());
-        meta.updated_at = iso_now();
+        meta.joined_at.insert(agent_id.clone(), now.clone());
+        meta.updated_at = now;
         atomic_write_json(&conv.join("meta.json"), &meta)?;
         write_system_message(
             &conv,
@@ -379,6 +381,11 @@ fn create_conversation_record(
     set_dir_private(&conv.join("messages"))?;
     set_dir_private(&conv.join("receipts"))?;
 
+    let now = iso_now();
+    let joined_at = participants
+        .iter()
+        .map(|id| (id.clone(), now.clone()))
+        .collect();
     let meta = Meta {
         v: SCHEMA_VERSION,
         id: conversation_id.clone(),
@@ -386,14 +393,15 @@ fn create_conversation_record(
         channel,
         private,
         state: "open".to_string(),
-        created_at: iso_now(),
-        updated_at: iso_now(),
+        created_at: now.clone(),
+        updated_at: now,
         retention_days: 14,
         rate: Rate {
             window_seconds: DEFAULT_RATE_WINDOW_SECONDS,
             max_messages_per_sender: DEFAULT_RATE_MAX_MESSAGES,
             max_message_bytes: DEFAULT_MAX_MESSAGE_BYTES,
         },
+        joined_at,
     };
     atomic_write_json(&conv.join("meta.json"), &meta)?;
     let subject = if channel {

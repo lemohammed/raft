@@ -577,6 +577,11 @@ fn cmd_channel_create(root: &Path, args: ChannelCreateArgs) -> Result<()> {
     set_dir_private(&conv.join("messages"))?;
     set_dir_private(&conv.join("receipts"))?;
 
+    let now = iso_now();
+    let joined_at = participants
+        .iter()
+        .map(|id| (id.clone(), now.clone()))
+        .collect();
     let meta = Meta {
         v: SCHEMA_VERSION,
         id: channel_id.clone(),
@@ -584,14 +589,15 @@ fn cmd_channel_create(root: &Path, args: ChannelCreateArgs) -> Result<()> {
         channel: true,
         private: false,
         state: "open".to_string(),
-        created_at: iso_now(),
-        updated_at: iso_now(),
+        created_at: now.clone(),
+        updated_at: now,
         retention_days: args.retention_days,
         rate: Rate {
             window_seconds: args.rate_window,
             max_messages_per_sender: args.rate_max,
             max_message_bytes: args.max_message_bytes,
         },
+        joined_at,
     };
     atomic_write_json(&conv.join("meta.json"), &meta)?;
     write_system_message(
@@ -638,8 +644,10 @@ fn cmd_channel_join(root: &Path, args: ChannelJoinArgs) -> Result<()> {
         .iter()
         .any(|participant| participant == &agent_id);
     if !already_member {
+        let now = iso_now();
         meta.participants.push(agent_id.clone());
-        meta.updated_at = iso_now();
+        meta.joined_at.insert(agent_id.clone(), now.clone());
+        meta.updated_at = now;
         atomic_write_json(&conv.join("meta.json"), &meta)?;
         write_system_message(
             &conv,
@@ -797,6 +805,11 @@ fn cmd_conversation_create(root: &Path, args: ConversationCreateArgs) -> Result<
     set_dir_private(&conv.join("messages"))?;
     set_dir_private(&conv.join("receipts"))?;
 
+    let now = iso_now();
+    let joined_at = participants
+        .iter()
+        .map(|id| (id.clone(), now.clone()))
+        .collect();
     let meta = Meta {
         v: SCHEMA_VERSION,
         id: conversation_id.clone(),
@@ -804,14 +817,15 @@ fn cmd_conversation_create(root: &Path, args: ConversationCreateArgs) -> Result<
         channel: false,
         private: args.private,
         state: "open".to_string(),
-        created_at: iso_now(),
-        updated_at: iso_now(),
+        created_at: now.clone(),
+        updated_at: now,
         retention_days: args.retention_days,
         rate: Rate {
             window_seconds: args.rate_window,
             max_messages_per_sender: args.rate_max,
             max_message_bytes: args.max_message_bytes,
         },
+        joined_at,
     };
     atomic_write_json(&conv.join("meta.json"), &meta)?;
     write_system_message(
@@ -891,8 +905,10 @@ fn cmd_conversation_add(root: &Path, args: ConversationAddArgs) -> Result<()> {
         .iter()
         .any(|participant| participant == &agent_id);
     if !already_participant {
+        let now = iso_now();
         meta.participants.push(agent_id.clone());
-        meta.updated_at = iso_now();
+        meta.joined_at.insert(agent_id.clone(), now.clone());
+        meta.updated_at = now;
         atomic_write_json(&conv.join("meta.json"), &meta)?;
         write_system_message(
             &conv,
@@ -1402,6 +1418,22 @@ fn await_kind(message: &Message) -> &'static str {
     }
 }
 
+/// True when `message` was created before `agent_id` joined `meta`'s room, so
+/// the agent is owed no obligation for activity predating its membership. A
+/// member with no recorded `joined_at` (legacy rooms, or founders of rooms
+/// created before this field existed) is treated as present from the start.
+/// Unparseable timestamps fall back to false — never hide a message we cannot
+/// place in time.
+fn predates_membership(meta: &Meta, message: &Message, agent_id: &str) -> bool {
+    let Some(joined) = meta.joined_at.get(agent_id) else {
+        return false;
+    };
+    matches!(
+        (parse_time(&message.created_at), parse_time(joined)),
+        (Ok(created), Ok(joined)) if created < joined
+    )
+}
+
 fn message_awaited(message: &Message, meta: &Meta) -> Vec<String> {
     if message.withdrawn.is_some() {
         return Vec::new();
@@ -1415,7 +1447,11 @@ fn message_awaited(message: &Message, meta: &Meta) -> Vec<String> {
     };
     awaited
         .into_iter()
-        .filter(|agent| agent != &message.from && agent != "*")
+        .filter(|agent| {
+            agent != &message.from
+                && agent != "*"
+                && !predates_membership(meta, message, agent)
+        })
         .collect()
 }
 
@@ -2995,7 +3031,26 @@ pub(crate) fn message_is_unread(root: &Path, message: &Message, agent_id: &str) 
     if message.from == agent_id {
         return false;
     }
-    !receipt_path_for(root, message, agent_id).exists()
+    if receipt_path_for(root, message, agent_id).exists() {
+        return false;
+    }
+    // No receipt yet: a message predating the viewer's membership is backlog,
+    // not unread. Load meta only on this cold path to keep the common
+    // already-read case a single stat.
+    let meta: Option<Meta> = read_json(
+        &root
+            .join("conversations")
+            .join(&message.conversation_id)
+            .join("meta.json"),
+    )
+    .ok()
+    .flatten();
+    if let Some(meta) = meta
+        && predates_membership(&meta, message, agent_id)
+    {
+        return false;
+    }
+    true
 }
 
 fn is_state_change_message(message: &Message) -> bool {
