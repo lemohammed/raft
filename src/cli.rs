@@ -540,6 +540,14 @@ pub(crate) struct WaitArgs {
     /// Limit to a single channel.
     #[arg(long)]
     pub(crate) channel: Option<String>,
+    /// Block until an open ask you are owed closes (a terminal ack), instead of
+    /// waiting for an unread message. Reports the resolved ask.
+    #[arg(long, conflicts_with_all = ["conversation", "channel", "resolved"])]
+    pub(crate) owed: bool,
+    /// Block until this specific ask you own closes (a terminal ack). Errors
+    /// `not_found` if the id is not an ask you are owed.
+    #[arg(long, conflicts_with_all = ["conversation", "channel"])]
+    pub(crate) resolved: Option<String>,
     /// Seconds to wait before giving up (exits 2 on timeout).
     #[arg(long, default_value_t = 300)]
     pub(crate) timeout: u64,

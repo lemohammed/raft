@@ -1673,6 +1673,9 @@ fn cmd_inbox(root: &Path, args: InboxArgs) -> Result<()> {
 
 fn cmd_wait(root: &Path, args: WaitArgs) -> Result<()> {
     let agent_id = validate_id(&args.agent, "agent id")?;
+    if args.owed || args.resolved.is_some() {
+        return cmd_wait_resolution(root, &agent_id, &args);
+    }
     let conversation_id =
         optional_target_room(args.conversation.as_deref(), args.channel.as_deref())?;
     let deadline = Instant::now() + Duration::from_secs(args.timeout);
@@ -1699,6 +1702,147 @@ fn cmd_wait(root: &Path, args: WaitArgs) -> Result<()> {
         }
         waker.wait(interval.min(remaining));
     }
+}
+
+/// Read the terminal ack status (and note) for one awaited agent on a message,
+/// or `None` if the awaited agent has not recorded a terminal `done`/`rejected`
+/// receipt yet.
+fn read_terminal_status(
+    root: &Path,
+    conversation_id: &str,
+    message_id: &str,
+    awaited: &str,
+) -> Result<Option<(String, Option<String>)>> {
+    let path = root
+        .join("conversations")
+        .join(conversation_id)
+        .join("receipts")
+        .join(message_id)
+        .join(format!("{awaited}.json"));
+    let Some(receipt): Option<Receipt> = read_json(&path)? else {
+        return Ok(None);
+    };
+    if ask_is_terminal(&receipt.status) {
+        Ok(Some((receipt.status, receipt.note)))
+    } else {
+        Ok(None)
+    }
+}
+
+fn emit_resolution(args: &WaitArgs, resolved: Option<(OpenAsk, Option<String>)>) -> Result<()> {
+    if args.json {
+        let value = resolved.as_ref().map(|(ask, note)| {
+            serde_json::json!({
+                "message_id": ask.message_id,
+                "conversation_id": ask.conversation_id,
+                "awaited": ask.awaited,
+                "status": ask.status,
+                "note": note,
+                "subject": ask.subject,
+            })
+        });
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({"ok": true, "resolved": value}))?
+        );
+    } else {
+        match resolved {
+            Some((ask, _)) => println!(
+                "{} in {} -> @{} [{}]: {}",
+                ask.message_id, ask.conversation_id, ask.awaited, ask.status, ask.subject
+            ),
+            None => println!("nothing owed"),
+        }
+    }
+    Ok(())
+}
+
+/// Block until an ask the agent is owed reaches a terminal receipt. With
+/// `--owed`, watch every ask the agent currently owns; with `--resolved <id>`,
+/// watch one specific ask (and report it immediately if already resolved).
+fn cmd_wait_resolution(root: &Path, agent_id: &str, args: &WaitArgs) -> Result<()> {
+    ensure_root(root)?;
+    let target = args
+        .resolved
+        .as_deref()
+        .map(|id| validate_id(id, "message id"))
+        .transpose()?;
+
+    let mut pending: Vec<OpenAsk> = gather_open_asks(root, None, Some(agent_id))?
+        .into_iter()
+        .filter(|ask| ask.from == agent_id)
+        .collect();
+    if let Some(id) = target.as_deref() {
+        pending.retain(|ask| ask.message_id == id);
+        if pending.is_empty() {
+            // Either the id is already resolved, or it was never the agent's ask.
+            return resolved_ask_already_closed(root, agent_id, id, args);
+        }
+    } else if pending.is_empty() {
+        // `--owed` with nothing open: there is nothing to block on.
+        return emit_resolution(args, None);
+    }
+
+    let deadline = Instant::now() + Duration::from_secs(args.timeout);
+    let waker = Waker::new(&[&root.join("conversations")]);
+    let interval = Duration::from_secs_f64(args.interval);
+    loop {
+        for ask in &pending {
+            if let Some((status, note)) =
+                read_terminal_status(root, &ask.conversation_id, &ask.message_id, &ask.awaited)?
+            {
+                let mut resolved = ask.clone();
+                resolved.status = status;
+                return emit_resolution(args, Some((resolved, note)));
+            }
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            bail_code!("timeout", "no owed ask resolved within {}s", args.timeout);
+        }
+        waker.wait(interval.min(remaining));
+    }
+}
+
+/// `--resolved <id>` where the id is not in the open-ask set: report it if it is
+/// the agent's already-closed ask, otherwise reject it as not the agent's ask.
+fn resolved_ask_already_closed(
+    root: &Path,
+    agent_id: &str,
+    id: &str,
+    args: &WaitArgs,
+) -> Result<()> {
+    let (_, message) = find_message(root, id)?;
+    let meta: Option<Meta> = read_json(
+        &root
+            .join("conversations")
+            .join(&message.conversation_id)
+            .join("meta.json"),
+    )?;
+    let awaited = meta
+        .as_ref()
+        .map(|meta| message_awaited(&message, meta))
+        .unwrap_or_default();
+    if message.from != agent_id || awaited.is_empty() {
+        bail_code!("not_found", "message {id:?} is not an ask you are owed");
+    }
+    for who in &awaited {
+        if let Some((status, note)) =
+            read_terminal_status(root, &message.conversation_id, &message.id, who)?
+        {
+            let ask = OpenAsk {
+                conversation_id: message.conversation_id.clone(),
+                message_id: message.id.clone(),
+                from: message.from.clone(),
+                awaited: who.clone(),
+                subject: message.subject.clone(),
+                created_at: message.created_at.clone(),
+                status,
+            };
+            return emit_resolution(args, Some((ask, note)));
+        }
+    }
+    bail_code!("not_found", "message {id:?} is not an ask you are owed");
 }
 
 fn cmd_watch(root: &Path, args: WatchArgs) -> Result<()> {

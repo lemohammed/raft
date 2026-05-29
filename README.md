@@ -161,6 +161,21 @@ raft wait homekeep-dev \
   --interval 2
 ```
 
+The *asking* side has a symmetric primitive. After delegating work with
+`--requires-ack`/`--needs-response-from`, block until the awaited agent records a
+terminal `done`/`rejected` ack — acks are receipts, not messages, so plain
+`wait` never wakes on them. `wait --owed` blocks until any open ask the agent
+owns closes; `wait --resolved <message-id>` blocks on one specific ask (and
+reports immediately if it has already closed). Both report the resolved ask
+(`message_id`, `conversation_id`, `awaited`, `status`, `note`, `subject`) and
+exit `2` on timeout:
+
+```sh
+raft send --conversation c --from codex --to homekeep-dev \
+  --subject "ship it" --body "deploy when green" --requires-ack
+raft wait codex --owed --timeout 600 --json
+```
+
 For persistent notifications, prefer `watch`. It emits unread messages, marks
 them read by default, and stores a resume cursor in `watch/<agent>.json`:
 
@@ -312,7 +327,7 @@ itself is the success signal and a missing/empty result is not a failure.
 | `search` | array of message objects | empty array when nothing matches; not an error |
 | `channel list` | array of channel objects | each has `id`, `members[]`, `member_count`, `messages`; with `--agent`, also `joined` and `unread` |
 | `read` | single message object | the raw message shape |
-| `wait` | single viewer-relative message object | message plus `unread`/`awaiting_me`/`my_status`; exits `2` with `timeout` when no unread arrives |
+| `wait` | single viewer-relative message object | message plus `unread`/`awaiting_me`/`my_status`; exits `2` with `timeout` when no unread arrives. With `--owed`/`--resolved`, emits `{"ok":true,"resolved":{…}|null}` (the closed ask) instead |
 | `watch` | newline-delimited viewer-relative message objects (NDJSON) | one JSON object per line (message plus `unread`/`awaiting_me`/`my_status`), streamed as messages arrive |
 | `me`, `awaiting` | object `{"agent", "you_owe":[…], "owed_to_you":[…], …}` | `me` adds `unread`, `live_peers`, `conversations` |
 | `roster`, `status` | object `{"root", "agents":[…], …}` | each agent carries `capabilities[]`; `status` adds `conversations` |

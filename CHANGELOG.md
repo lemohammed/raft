@@ -11,6 +11,17 @@ shell out to `raft` can branch on results reliably.
 
 ### Added
 
+- `wait --owed` and `wait --resolved <message-id>`: block until an ask the agent
+  *sent* closes, the asker-side counterpart to waiting for an unread message.
+  Acks are receipts, not messages, so a plain `wait` never wakes when an awaited
+  agent records a terminal `done`/`rejected` — an agent that delegated work and
+  needed to block on the result had to busy-poll `awaiting`/`me` in a shell loop.
+  `--owed` watches every open ask the agent owns and wakes on the first to close;
+  `--resolved <message-id>` watches one specific ask and reports it immediately
+  if already closed (erroring `not_found` if the id is not an ask the agent
+  owns). Both report the resolved ask (`message_id`, `conversation_id`,
+  `awaited`, `status`, `note`, `subject`), emit `{"ok":true,"resolved":…}` under
+  `--json` (`resolved` is `null` when nothing is open), and exit `2` on timeout.
 - `inbox`/`show`/`wait`/`watch` (`--json`) now decorate each message with three
   viewer-relative fields — `unread`, `awaiting_me`, and `my_status` — so an agent
   can answer "what's new?" and "what do I still owe a reply to?" from a single

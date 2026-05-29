@@ -2949,3 +2949,106 @@ fn inbox_json_carries_viewer_relative_action_signals() {
     assert_eq!(msg["awaiting_me"], false);
     assert_eq!(msg["my_status"], serde_json::Value::Null);
 }
+
+#[test]
+fn wait_owed_blocks_until_an_owed_ask_closes() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(&bus, &["claim", "alice", "--workspace", "."]);
+    run(&bus, &["claim", "bob", "--workspace", "."]);
+    run(
+        &bus,
+        &[
+            "conversation", "create", "c", "--participants", "alice,bob",
+            "--starter", "alice",
+        ],
+    );
+    let sent = run(
+        &bus,
+        &[
+            "send", "--conversation", "c", "--from", "alice", "--to", "bob",
+            "--subject", "Q", "--body", "ack pls", "--requires-ack", "--json",
+        ],
+    );
+    let mid = serde_json::from_slice::<serde_json::Value>(&sent.stdout).unwrap()["message_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // bob records a terminal ack shortly after alice starts blocking.
+    let bus_thread = bus.clone();
+    let mid_thread = mid.clone();
+    let acker = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(300));
+        run(
+            &bus_thread,
+            &["ack", "bob", &mid_thread, "--status", "done", "--note", "ok"],
+        );
+    });
+
+    let owed = run(&bus, &["wait", "alice", "--owed", "--timeout", "10", "--json"]);
+    acker.join().unwrap();
+    let owed_json: serde_json::Value = serde_json::from_slice(&owed.stdout).unwrap();
+    assert_eq!(owed_json["ok"], true);
+    assert_eq!(owed_json["resolved"]["message_id"], mid);
+    assert_eq!(owed_json["resolved"]["awaited"], "bob");
+    assert_eq!(owed_json["resolved"]["status"], "done");
+    assert_eq!(owed_json["resolved"]["note"], "ok");
+
+    // --resolved on the now-closed ask reports it immediately.
+    let resolved = run(&bus, &["wait", "alice", "--resolved", &mid, "--json"]);
+    let resolved_json: serde_json::Value = serde_json::from_slice(&resolved.stdout).unwrap();
+    assert_eq!(resolved_json["resolved"]["status"], "done");
+
+    // With nothing else open, --owed returns null without blocking.
+    let none = run(&bus, &["wait", "alice", "--owed", "--timeout", "2", "--json"]);
+    let none_json: serde_json::Value = serde_json::from_slice(&none.stdout).unwrap();
+    assert_eq!(none_json["resolved"], serde_json::Value::Null);
+}
+
+#[test]
+fn wait_resolution_rejects_unknown_and_unowned_asks() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(&bus, &["claim", "alice", "--workspace", "."]);
+    run(&bus, &["claim", "bob", "--workspace", "."]);
+    run(
+        &bus,
+        &[
+            "conversation", "create", "c", "--participants", "alice,bob",
+            "--starter", "alice",
+        ],
+    );
+    let sent = run(
+        &bus,
+        &[
+            "send", "--conversation", "c", "--from", "alice", "--to", "bob",
+            "--subject", "Q", "--body", "ack pls", "--requires-ack", "--json",
+        ],
+    );
+    let mid = serde_json::from_slice::<serde_json::Value>(&sent.stdout).unwrap()["message_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // An unknown message id is not found.
+    let unknown = run_fail(&bus, &["wait", "alice", "--resolved", "m-nope-000000", "--json"]);
+    let unknown_json: serde_json::Value = serde_json::from_slice(&unknown.stderr).unwrap();
+    assert_eq!(unknown_json["error"]["code"], "not_found");
+
+    // bob does not own this ask (alice sent it), so bob cannot wait on it.
+    let unowned = run_fail(&bus, &["wait", "bob", "--resolved", &mid, "--json"]);
+    let unowned_json: serde_json::Value = serde_json::from_slice(&unowned.stderr).unwrap();
+    assert_eq!(unowned_json["error"]["code"], "not_found");
+
+    // An open ask that never closes times out with exit code 2.
+    let timed_out = Command::new(bin())
+        .arg("--root")
+        .arg(&bus)
+        .args(["wait", "alice", "--owed", "--timeout", "1", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(timed_out.status.code(), Some(2));
+    let timeout_json: serde_json::Value = serde_json::from_slice(&timed_out.stderr).unwrap();
+    assert_eq!(timeout_json["error"]["code"], "timeout");
+}
