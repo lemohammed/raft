@@ -1069,6 +1069,7 @@ fn cmd_send(root: &Path, args: SendArgs) -> Result<()> {
             needs_response_from: args.needs_response_from,
         },
     )?;
+    let offline = offline_recipients(root, &message)?;
     if json {
         println!(
             "{}",
@@ -1079,10 +1080,12 @@ fn cmd_send(root: &Path, args: SendArgs) -> Result<()> {
                 "to": message.to,
                 "mentions": message.mentions,
                 "needs_response_from": message.needs_response_from,
+                "offline_recipients": offline,
             }))?
         );
     } else {
         println!("{}", message.id);
+        warn_offline_recipients(&offline);
     }
     Ok(())
 }
@@ -1129,6 +1132,7 @@ fn cmd_reply(root: &Path, args: ReplyArgs) -> Result<()> {
     if let Some(status) = &ack_status {
         write_receipt(root, &sender, &parent, status, args.ack_note)?;
     }
+    let offline = offline_recipients(root, &message)?;
     if json {
         println!(
             "{}",
@@ -1141,12 +1145,28 @@ fn cmd_reply(root: &Path, args: ReplyArgs) -> Result<()> {
                 "needs_response_from": message.needs_response_from,
                 "after": message.after,
                 "ack": ack_status,
+                "offline_recipients": offline,
             }))?
         );
     } else {
         println!("{}", message.id);
+        warn_offline_recipients(&offline);
     }
     Ok(())
+}
+
+/// Text-mode courtesy: warn on stderr (so it never pollutes the stdout id) when
+/// a message went to a recipient whose heartbeat has expired.
+fn warn_offline_recipients(offline: &[String]) {
+    if offline.is_empty() {
+        return;
+    }
+    let names = offline
+        .iter()
+        .map(|id| format!("@{id}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    eprintln!("warning: offline recipient(s): {names}");
 }
 
 pub(crate) fn send_message(root: &Path, input: SendMessageInput) -> Result<Message> {
@@ -1266,6 +1286,28 @@ pub(crate) fn live_agent_ids(root: &Path) -> Result<BTreeSet<String>> {
         }
     }
     Ok(live)
+}
+
+/// Resolved recipients of a just-sent message whose heartbeat has expired. A
+/// `*` recipient expands to the conversation's participants so a broadcast
+/// reports each offline member; the sender is never counted. Lets a sender that
+/// just delegated work learn immediately that a peer is down — before it blocks
+/// on `wait` for a reply that will never come.
+fn offline_recipients(root: &Path, message: &Message) -> Result<Vec<String>> {
+    let live = live_agent_ids(root)?;
+    let (_, meta) = load_conversation(root, &message.conversation_id)?;
+    let mut targets = Vec::new();
+    for recipient in &message.to {
+        if recipient == "*" {
+            targets.extend(meta.participants.iter().cloned());
+        } else {
+            targets.push(recipient.clone());
+        }
+    }
+    Ok(unique(targets)
+        .into_iter()
+        .filter(|target| target != &message.from && !live.contains(target))
+        .collect())
 }
 
 pub(crate) fn gather_open_asks(

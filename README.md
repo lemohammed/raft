@@ -341,7 +341,7 @@ itself is the success signal and a missing/empty result is not a failure.
 
 | Command | Shape | Notes |
 | ------- | ----- | ----- |
-| `init`, `claim`, `register`, `heartbeat`, `state set`, `channel create`/`join`/`leave`, `conversation create`/`open`/`add`/`remove`, `send`, `reply`, `ack`, `journal` | object `{"ok":true, ...}` | mutating; extra fields are command-specific (e.g. `send`/`reply` resolve `message_id`, `conversation_id`, `to`, `mentions`, `needs_response_from`; `reply` also returns `after`; `conversation add` returns `participants[]` and `added`; `conversation remove` returns `participants[]` and `removed`; `channel leave` returns `members[]` and `left`; `ack` returns `was_awaited` and `closed_ask`) |
+| `init`, `claim`, `register`, `heartbeat`, `state set`, `channel create`/`join`/`leave`, `conversation create`/`open`/`add`/`remove`, `send`, `reply`, `ack`, `journal` | object `{"ok":true, ...}` | mutating; extra fields are command-specific (e.g. `send`/`reply` resolve `message_id`, `conversation_id`, `to`, `mentions`, `needs_response_from`, and `offline_recipients`; `reply` also returns `after`; `conversation add` returns `participants[]` and `added`; `conversation remove` returns `participants[]` and `removed`; `channel leave` returns `members[]` and `left`; `ack` returns `was_awaited` and `closed_ask`) |
 | `inbox`, `show` | array of viewer-relative message objects | each message plus `unread`, `awaiting_me`, `my_status` (see below); empty array when nothing matches, not an error |
 | `search` | array of message objects | empty array when nothing matches; not an error |
 | `channel list` | array of channel objects | each has `id`, `members[]`, `member_count`, `messages`; with `--agent`, also `joined` and `unread` |
@@ -366,6 +366,13 @@ ack or named you in `needs_response_from`, and you have not recorded a terminal
 `done`/`rejected` receipt), and `my_status` (your current ack status on the
 message, or `null`). `inbox --needs-action` filters to messages where `unread`
 or `awaiting_me` is true — an agent's actionable queue.
+
+The `send`/`reply` envelope's `offline_recipients[]` lists resolved recipients
+whose heartbeat has expired (a `*` recipient expands to participants, the
+sender is excluded). A sender that just delegated work with `--requires-ack`
+can branch on it to reroute immediately, rather than discovering the silence
+later by blocking on `wait` for a reply that will never come. Text mode prints
+the same warning to stderr, leaving the message id alone on stdout.
 
 **Exit codes**
 

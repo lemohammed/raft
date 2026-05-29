@@ -3264,3 +3264,85 @@ fn open_asks_report_whether_the_awaited_agent_is_live() {
         "text output should mark the offline delegate"
     );
 }
+
+#[test]
+fn send_envelope_flags_offline_recipients() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(&bus, &["claim", "alice", "--workspace", "."]);
+    run(&bus, &["claim", "bob", "--workspace", "."]);
+    run(&bus, &["claim", "carol", "--workspace", "."]);
+    run(
+        &bus,
+        &[
+            "conversation", "create", "c", "--participants", "alice,bob,carol",
+            "--starter", "alice",
+        ],
+    );
+
+    // Expire bob's heartbeat so he reads as offline; carol stays live.
+    let bob = bus.join("agents").join("bob.json");
+    let mut agent: serde_json::Value =
+        serde_json::from_slice(&fs::read(&bob).unwrap()).unwrap();
+    agent["expires_at"] = serde_json::json!("2000-01-01T00:00:00Z");
+    fs::write(&bob, serde_json::to_vec(&agent).unwrap()).unwrap();
+
+    let offline = |out: &std::process::Output| -> Vec<String> {
+        let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        v["offline_recipients"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x.as_str().unwrap().to_string())
+            .collect()
+    };
+
+    // A send to a downed peer surfaces it so the sender can reroute now,
+    // instead of discovering the silence later via a blocked `wait`.
+    let mixed = run(
+        &bus,
+        &[
+            "send", "--conversation", "c", "--from", "alice", "--to", "bob,carol",
+            "--subject", "Q", "--body", "ship it", "--requires-ack", "--json",
+        ],
+    );
+    assert_eq!(offline(&mixed), vec!["bob".to_string()]);
+
+    // All-live recipients yield an empty list, never a missing field.
+    let live_only = run(
+        &bus,
+        &[
+            "send", "--conversation", "c", "--from", "alice", "--to", "carol",
+            "--subject", "hi", "--body", "yo", "--json",
+        ],
+    );
+    assert!(offline(&live_only).is_empty());
+
+    // A `*` broadcast expands to participants (minus the sender) and still
+    // reports the offline member.
+    let broadcast = run(
+        &bus,
+        &[
+            "send", "--conversation", "c", "--from", "alice", "--to", "*",
+            "--subject", "all", "--body", "hey", "--json",
+        ],
+    );
+    assert_eq!(offline(&broadcast), vec!["bob".to_string()]);
+
+    // Text mode warns on stderr without polluting the stdout id.
+    let text = run(
+        &bus,
+        &[
+            "send", "--conversation", "c", "--from", "alice", "--to", "bob",
+            "--subject", "t", "--body", "x",
+        ],
+    );
+    assert!(
+        String::from_utf8_lossy(&text.stderr).contains("offline recipient(s): @bob"),
+        "text mode should warn about the offline recipient on stderr"
+    );
+    assert!(
+        !String::from_utf8_lossy(&text.stdout).contains("offline"),
+        "stdout should carry only the message id"
+    );
+}

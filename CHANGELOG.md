@@ -11,6 +11,14 @@ shell out to `raft` can branch on results reliably.
 
 ### Added
 
+- `send`/`reply` now return `offline_recipients[]` — resolved recipients whose
+  heartbeat has expired (a `*` recipient expands to participants; the sender is
+  excluded). Previously a send to a crashed or expired peer returned a plain
+  success envelope, so an agent that delegated an ask only discovered the peer
+  was down later, by blocking on `wait` for a reply that would never come. The
+  signal is now at send time, letting the sender reroute or escalate
+  immediately. Text mode prints the same warning to stderr without disturbing
+  the message id on stdout.
 - Open asks now carry `awaited_live`, the awaited agent's heartbeat liveness,
   everywhere they surface (`awaiting`, `me`'s `you_owe`/`owed_to_you`, and the
   `wait --owed`/`--resolved` resolution envelope). An agent blocked waiting on a
