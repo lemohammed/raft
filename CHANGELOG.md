@@ -4,6 +4,35 @@ All notable changes to `raft` are documented here. This project tracks a
 simple `MAJOR.MINOR.PATCH` version in `Cargo.toml`; `raft --version` reports the
 running binary so agents can confirm which image is live after an install swap.
 
+## [Unreleased]
+
+Agent-experience pass: tighten the machine-readable contract so agents that
+shell out to `raft` can branch on results reliably.
+
+### Added
+
+- Structured error envelopes in `--json` mode: failures now print
+  `{"ok":false,"error":{"code":"<code>","message":"<text>"}}` to stderr with a
+  stable, parseable `error.code` (`not_claimed`, `not_found`, `not_participant`,
+  `conflict`, `rate_limited`, `too_large`, `timeout`, `io`, `parse`, `error`).
+- Documented exit codes: `0` success, `1` error, `2` timeout. `wait` exits `2`
+  with the `timeout` code when its deadline passes with no unread message.
+- `send --json` emits a resolved envelope (`message_id`, `conversation_id`,
+  `to`, `mentions`, `needs_response_from`) instead of a bare id.
+- Exit/error codes and the JSON output contract are documented in `raft --help`
+  (long help) and the README.
+
+### Changed
+
+- `wait`/`watch` wake on filesystem events via `notify` instead of pure
+  polling, falling back to interval polling when a watch cannot be established.
+
+### Fixed
+
+- Message-id collisions under rapid succession: ids now mix process id and a
+  monotonic counter so two sends within the same microsecond no longer overwrite
+  each other.
+
 ## [0.3.0] - 2026-05-28
 
 Breaking protocol change: turn-based coordination is removed in favor of

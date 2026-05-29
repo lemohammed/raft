@@ -157,12 +157,12 @@ fn read_http_request(stream: &mut TcpStream) -> Result<HttpRequest> {
         });
     }
     let header_end =
-        http_header_end(&bytes).ok_or_else(|| RaftError("invalid HTTP request".to_string()))?;
+        http_header_end(&bytes).ok_or_else(|| RaftError::new("invalid HTTP request".to_string()))?;
     let header_text = String::from_utf8_lossy(&bytes[..header_end]);
     let mut lines = header_text.lines();
     let request_line = lines
         .next()
-        .ok_or_else(|| RaftError("missing HTTP request line".to_string()))?;
+        .ok_or_else(|| RaftError::new("missing HTTP request line".to_string()))?;
     let mut parts = request_line.split_whitespace();
     let method = parts.next().unwrap_or("").to_string();
     let target = parts.next().unwrap_or("/").to_string();
@@ -299,7 +299,7 @@ fn create_ui_channel(root: &Path, creator: &str, channel: &str, members: &str) -
     let conv = conversation_path(root, &channel_id)?;
     if conv.join("meta.json").exists() {
         let meta: Meta = read_json(&conv.join("meta.json"))?
-            .ok_or_else(|| RaftError(format!("channel {channel_id:?} has no metadata")))?;
+            .ok_or_else(|| RaftError::new(format!("channel {channel_id:?} has no metadata")))?;
         if !meta.channel {
             bail!("{channel_id:?} already exists but is not a channel");
         }
@@ -322,7 +322,7 @@ fn join_channel(root: &Path, agent: &str, channel: &str) -> Result<()> {
     )?;
     let conv = conversation_path(root, &channel_id)?;
     let mut meta: Meta = read_json(&conv.join("meta.json"))?
-        .ok_or_else(|| RaftError(format!("channel {channel_id:?} does not exist")))?;
+        .ok_or_else(|| RaftError::new(format!("channel {channel_id:?} does not exist")))?;
     if !meta.channel {
         bail!("{channel_id:?} is not a channel");
     }
@@ -429,7 +429,7 @@ fn http_content_length(headers: &str) -> Result<usize> {
             return value
                 .trim()
                 .parse::<usize>()
-                .map_err(|_| RaftError("invalid Content-Length".to_string()));
+                .map_err(|_| RaftError::new("invalid Content-Length".to_string()));
         }
     }
     Ok(0)
@@ -461,7 +461,7 @@ fn validate_ui_request_security(
     bind_port: u16,
 ) -> Result<()> {
     let host =
-        http_header(request, "host").ok_or_else(|| RaftError("missing Host header".to_string()))?;
+        http_header(request, "host").ok_or_else(|| RaftError::new("missing Host header".to_string()))?;
     let allowed_hosts = ui_allowed_hosts(bind_host, bind_port);
     if !allowed_hosts
         .iter()

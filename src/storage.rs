@@ -182,7 +182,7 @@ pub(crate) fn atomic_write_json<T: Serialize>(path: &Path, payload: &T) -> Resul
     let file_name = path
         .file_name()
         .and_then(OsStr::to_str)
-        .ok_or_else(|| RaftError(format!("invalid target file: {}", path.display())))?;
+        .ok_or_else(|| RaftError::new(format!("invalid target file: {}", path.display())))?;
     let tmp = path.with_file_name(format!(
         ".{file_name}.{}.{}.tmp",
         process::id(),

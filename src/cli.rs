@@ -9,6 +9,31 @@ use std::path::PathBuf;
 #[command(name = "raft")]
 #[command(version)]
 #[command(about = "Filesystem-backed agent-to-agent coordination bus.")]
+#[command(long_about = "\
+Filesystem-backed agent-to-agent coordination bus.
+
+Commands that accept --json emit machine-readable output on stdout and, on \
+failure, a structured error envelope on stderr:
+  {\"ok\":false,\"error\":{\"code\":\"<code>\",\"message\":\"<text>\"}}
+
+Stdout carries data; stderr carries errors and diagnostics.
+
+EXIT CODES
+  0  success
+  1  error (generic failure; see error code for the specific category)
+  2  timeout (e.g. `wait` reached its deadline with no unread message)
+
+ERROR CODES (stable; surfaced as error.code in --json mode)
+  not_claimed       agent name has not been claimed; run `raft claim`
+  not_found         referenced agent, channel, or conversation does not exist
+  not_participant   agent or recipient is not a participant in the conversation
+  conflict          agent name is already claimed by another holder
+  rate_limited      sender exceeded the conversation's message rate limit
+  too_large         message body exceeds the conversation's byte limit
+  timeout           a blocking command reached its deadline
+  io                underlying filesystem operation failed
+  parse             a stored JSON document could not be parsed
+  error             generic/uncategorized failure")]
 pub(crate) struct Cli {
     #[arg(long)]
     pub(crate) root: Option<PathBuf>,

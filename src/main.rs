@@ -44,17 +44,56 @@ pub(crate) const SCHEMA_VERSION: u16 = 1;
 
 fn main() {
     let cli = Cli::parse();
+    let json = command_wants_json(&cli.command);
     let root = match root_path(cli.root) {
         Ok(path) => path,
-        Err(err) => {
-            eprintln!("raft: {err}");
-            process::exit(1);
-        }
+        Err(err) => fail(err, json),
     };
 
     if let Err(err) = run(root, cli.command) {
+        fail(err, json);
+    }
+}
+
+/// Report a fatal error and exit. In `--json` mode the error is emitted as a
+/// stable, machine-parseable envelope on stderr; otherwise a human-readable
+/// `raft: <message>` line. The process exit code is derived from the error's
+/// category (see `RaftError::exit_code`).
+fn fail(err: RaftError, json: bool) -> ! {
+    if json {
+        let envelope = serde_json::json!({
+            "ok": false,
+            "error": { "code": err.code, "message": err.message },
+        });
+        eprintln!("{envelope}");
+    } else {
         eprintln!("raft: {err}");
-        process::exit(1);
+    }
+    process::exit(err.exit_code());
+}
+
+/// Whether the invoked command was asked to produce machine-readable JSON.
+/// Mirrors the set of commands that carry a `--json` flag so the top-level
+/// error path can match the success path's output format.
+fn command_wants_json(command: &Commands) -> bool {
+    match command {
+        Commands::State {
+            command: StateCommand::Get(args),
+        } => args.json,
+        Commands::Send(args) => args.json,
+        Commands::Awaiting(args) => args.json,
+        Commands::Roster(args) => args.json,
+        Commands::Inbox(args) => args.json,
+        Commands::Wait(args) => args.json,
+        Commands::Watch(args) => args.json,
+        Commands::Show(args) => args.json,
+        Commands::Search(args) => args.json,
+        Commands::Thread(args) => args.json,
+        Commands::Read(args) => args.json,
+        Commands::Receipts(args) => args.json,
+        Commands::Status(args) => args.json,
+        Commands::Doctor(args) => args.json,
+        _ => false,
     }
 }
 
@@ -155,7 +194,7 @@ fn cmd_claim(root: &Path, args: ClaimArgs) -> Result<()> {
     )?;
     let path = agent_path(root, &agent_id);
     if path.exists() {
-        bail!("agent name @{agent_id} is already claimed");
+        bail_code!("conflict", "agent name @{agent_id} is already claimed");
     }
     let workspace = args.workspace.map(|path| resolve_path(&path)).transpose()?;
     let payload = Agent {
@@ -188,7 +227,12 @@ fn cmd_register(root: &Path, args: RegisterArgs) -> Result<()> {
         LOCK_TIMEOUT_SECONDS,
     )?;
     let previous: Agent = read_json(&agent_path(root, &agent_id))?
-        .ok_or_else(|| RaftError(format!("agent @{agent_id} is not claimed; use raft claim")))?;
+        .ok_or_else(|| {
+            RaftError::coded(
+                "not_claimed",
+                format!("agent @{agent_id} is not claimed; use raft claim"),
+            )
+        })?;
     let workspace = args
         .workspace
         .map(|path| resolve_path(&path))
@@ -245,7 +289,12 @@ fn heartbeat_once(
         LOCK_TIMEOUT_SECONDS,
     )?;
     let previous: Agent = read_json(&agent_path(root, agent_id))?
-        .ok_or_else(|| RaftError(format!("agent @{agent_id} is not claimed; use raft claim")))?;
+        .ok_or_else(|| {
+            RaftError::coded(
+                "not_claimed",
+                format!("agent @{agent_id} is not claimed; use raft claim"),
+            )
+        })?;
     let ttl = ttl_override.unwrap_or(previous.ttl_seconds);
     let payload = Agent {
         v: SCHEMA_VERSION,
@@ -276,7 +325,12 @@ fn cmd_heartbeat_watch(
     interval_override: Option<f64>,
 ) -> Result<()> {
     let previous: Agent = read_json(&agent_path(root, agent_id))?
-        .ok_or_else(|| RaftError(format!("agent @{agent_id} is not claimed; use raft claim")))?;
+        .ok_or_else(|| {
+            RaftError::coded(
+                "not_claimed",
+                format!("agent @{agent_id} is not claimed; use raft claim"),
+            )
+        })?;
     let ttl = ttl_override.unwrap_or(previous.ttl_seconds);
     let interval = interval_override.unwrap_or_else(|| (ttl as f64 / 2.0).max(1.0));
     if !interval.is_finite() || interval <= 0.0 {
@@ -345,7 +399,12 @@ fn cmd_state_set(root: &Path, args: StateSetArgs) -> Result<()> {
         LOCK_TIMEOUT_SECONDS,
     )?;
     let previous: Agent = read_json(&agent_path(root, &agent_id))?
-        .ok_or_else(|| RaftError(format!("agent @{agent_id} is not claimed; use raft claim")))?;
+        .ok_or_else(|| {
+            RaftError::coded(
+                "not_claimed",
+                format!("agent @{agent_id} is not claimed; use raft claim"),
+            )
+        })?;
     let changed = previous.current_state != state || previous.state_note != args.note;
     let now = iso_now();
     let payload = Agent {
@@ -375,7 +434,12 @@ fn cmd_state_get(root: &Path, args: StateGetArgs) -> Result<()> {
     let agent_id = validate_id(&args.agent, "agent id")?;
     ensure_root(root)?;
     let agent: Agent = read_json(&agent_path(root, &agent_id))?
-        .ok_or_else(|| RaftError(format!("agent @{agent_id} is not claimed; use raft claim")))?;
+        .ok_or_else(|| {
+            RaftError::coded(
+                "not_claimed",
+                format!("agent @{agent_id} is not claimed; use raft claim"),
+            )
+        })?;
     if args.json {
         println!(
             "{}",
@@ -418,7 +482,7 @@ fn cmd_channel_create(root: &Path, args: ChannelCreateArgs) -> Result<()> {
         if args.if_missing {
             migrate_conversation_records(&conv)?;
             let meta: Meta = read_json(&conv.join("meta.json"))?
-                .ok_or_else(|| RaftError(format!("channel {channel_id:?} has no metadata")))?;
+                .ok_or_else(|| RaftError::new(format!("channel {channel_id:?} has no metadata")))?;
             if !meta.channel {
                 bail!("{channel_id:?} already exists but is not a channel");
             }
@@ -476,7 +540,9 @@ fn cmd_channel_join(root: &Path, args: ChannelJoinArgs) -> Result<()> {
     )?;
     let conv = conversation_path(root, &channel_id)?;
     let mut meta: Meta = read_json(&conv.join("meta.json"))?
-        .ok_or_else(|| RaftError(format!("channel {channel_id:?} does not exist")))?;
+        .ok_or_else(|| {
+            RaftError::coded("not_found", format!("channel {channel_id:?} does not exist"))
+        })?;
     if !meta.channel {
         bail!("{channel_id:?} is not a channel");
     }
@@ -1002,7 +1068,7 @@ fn cmd_wait(root: &Path, args: WaitArgs) -> Result<()> {
         }
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
-            process::exit(2);
+            bail_code!("timeout", "no unread message arrived within {}s", args.timeout);
         }
         waker.wait(interval.min(remaining));
     }
@@ -1251,10 +1317,10 @@ fn cmd_receipts(root: &Path, args: ReceiptsArgs) -> Result<()> {
     let (_, message) = find_message(root, &args.message_id)?;
     let conv = conversation_path(root, &message.conversation_id)?;
     let meta: Meta = read_json(&conv.join("meta.json"))?.ok_or_else(|| {
-        RaftError(format!(
-            "conversation {:?} does not exist",
-            message.conversation_id
-        ))
+        RaftError::coded(
+            "not_found",
+            format!("conversation {:?} does not exist", message.conversation_id),
+        )
     })?;
     let recipients = receipt_recipients(&message, &meta);
     let receipts = load_message_receipts(root, &message)?;
@@ -1343,7 +1409,7 @@ fn cmd_status(root: &Path, args: StatusArgs) -> Result<()> {
             continue;
         }
         let agent: Agent = read_json(&entry.path())?.ok_or_else(|| {
-            RaftError(format!(
+            RaftError::new(format!(
                 "agent file disappeared: {}",
                 entry.path().display()
             ))
@@ -1533,7 +1599,12 @@ fn cmd_serve(root: &Path, args: ServeArgs) -> Result<()> {
 fn load_conversation(root: &Path, conversation_id: &str) -> Result<(PathBuf, Meta)> {
     let conv = conversation_path(root, conversation_id)?;
     let meta: Meta = read_json(&conv.join("meta.json"))?
-        .ok_or_else(|| RaftError(format!("conversation {conversation_id:?} does not exist")))?;
+        .ok_or_else(|| {
+            RaftError::coded(
+                "not_found",
+                format!("conversation {conversation_id:?} does not exist"),
+            )
+        })?;
     Ok((conv, meta))
 }
 
@@ -1546,7 +1617,8 @@ fn enforce_rate_limit(
 ) -> Result<()> {
     let size = body.len();
     if size > meta.rate.max_message_bytes {
-        bail!(
+        bail_code!(
+            "too_large",
             "message is {size} bytes; limit is {}",
             meta.rate.max_message_bytes
         );
@@ -1569,7 +1641,8 @@ fn enforce_rate_limit(
         entry.count = 0;
     }
     if entry.count >= meta.rate.max_messages_per_sender {
-        bail!(
+        bail_code!(
+            "rate_limited",
             "rate limited: {rate_key:?} already sent {} messages in {}s for {:?}",
             meta.rate.max_messages_per_sender,
             meta.rate.window_seconds,
@@ -1708,7 +1781,7 @@ fn build_thread_node(
         .iter()
         .find(|message| message.id == message_id)
         .ok_or_else(|| {
-            RaftError(format!(
+            RaftError::new(format!(
                 "message {message_id:?} was not found in visible thread"
             ))
         })?;
@@ -1772,7 +1845,7 @@ fn parse_since_cutoff(value: &str) -> Result<DateTime<Utc>> {
         bail!("invalid --since {value:?}; use RFC3339 or a duration like 30m, 2h, 7d");
     };
     let amount: i64 = number.parse().map_err(|_| {
-        RaftError(format!(
+        RaftError::new(format!(
             "invalid --since {value:?}; duration must be numeric"
         ))
     })?;
@@ -1798,7 +1871,7 @@ fn find_message(root: &Path, message_id: &str) -> Result<(PathBuf, Message)> {
             .join(format!("{message_id}.json"));
         if path.exists() {
             let message: Message = read_json(&path)?.ok_or_else(|| {
-                RaftError(format!("message file disappeared: {}", path.display()))
+                RaftError::new(format!("message file disappeared: {}", path.display()))
             })?;
             return Ok((path, message));
         }
@@ -1851,10 +1924,10 @@ fn write_receipt(
 ) -> Result<()> {
     let conv = conversation_path(root, &message.conversation_id)?;
     let meta: Meta = read_json(&conv.join("meta.json"))?.ok_or_else(|| {
-        RaftError(format!(
-            "conversation {:?} does not exist",
-            message.conversation_id
-        ))
+        RaftError::coded(
+            "not_found",
+            format!("conversation {:?} does not exist", message.conversation_id),
+        )
     })?;
     ensure_participant(&meta, agent_id)?;
     if !message_visible_to(message, agent_id) {
@@ -1893,7 +1966,7 @@ fn archive_old_messages(_root: &Path, conv: &Path, meta: &Meta) -> Result<usize>
     let archive_dir = conv
         .parent()
         .and_then(Path::parent)
-        .ok_or_else(|| RaftError("invalid conversation path".to_string()))?
+        .ok_or_else(|| RaftError::new("invalid conversation path".to_string()))?
         .join("archive")
         .join(&meta.id);
     let mut archived = 0;
@@ -1937,7 +2010,7 @@ fn archive_message_receipts(
     let stem = archived_message_path
         .file_stem()
         .and_then(OsStr::to_str)
-        .ok_or_else(|| RaftError("invalid archived message path".to_string()))?;
+        .ok_or_else(|| RaftError::new("invalid archived message path".to_string()))?;
     let mut target = receipts_dir.join(stem);
     if target.exists() {
         target = receipts_dir.join(format!("{stem}-{}", unique_token()));
@@ -2021,7 +2094,11 @@ pub(crate) fn write_system_message(
 
 fn ensure_participant(meta: &Meta, agent_id: &str) -> Result<()> {
     if !meta.participants.iter().any(|item| item == agent_id) {
-        bail!("agent {agent_id:?} is not a participant in {:?}", meta.id);
+        bail_code!(
+            "not_participant",
+            "agent {agent_id:?} is not a participant in {:?}",
+            meta.id
+        );
     }
     Ok(())
 }
@@ -2029,7 +2106,8 @@ fn ensure_participant(meta: &Meta, agent_id: &str) -> Result<()> {
 fn ensure_recipients(meta: &Meta, recipients: &[String]) -> Result<()> {
     for recipient in recipients {
         if recipient != "*" && !meta.participants.iter().any(|item| item == recipient) {
-            bail!(
+            bail_code!(
+                "not_participant",
                 "recipient {recipient:?} is not a participant in {:?}",
                 meta.id
             );

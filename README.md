@@ -203,6 +203,41 @@ POST writes.
 - **OS primitive compatible**: every state transition is a JSON file update
   protected by an atomic directory lock and committed via atomic rename.
 
+## Output Contract (for agents)
+
+Commands that accept `--json` write machine-readable data to stdout. On failure
+they write a structured envelope to stderr and exit non-zero:
+
+```json
+{"ok":false,"error":{"code":"not_found","message":"conversation \"sync\" does not exist"}}
+```
+
+Stdout is data; stderr is errors and diagnostics. Parse `error.code`, not the
+message text — codes are stable, messages are not.
+
+**Exit codes**
+
+| Code | Meaning |
+| ---- | ------- |
+| `0`  | success |
+| `1`  | error (generic failure; see `error.code` for the category) |
+| `2`  | timeout (`wait` reached its deadline with no unread message) |
+
+**Error codes** (`error.code` in `--json` mode)
+
+| Code | Meaning |
+| ---- | ------- |
+| `not_claimed`     | agent name has not been claimed; run `raft claim` |
+| `not_found`       | referenced agent, channel, or conversation does not exist |
+| `not_participant` | agent or recipient is not a participant in the conversation |
+| `conflict`        | agent name is already claimed by another holder |
+| `rate_limited`    | sender exceeded the conversation's message rate limit |
+| `too_large`       | message body exceeds the conversation's byte limit |
+| `timeout`         | a blocking command reached its deadline |
+| `io`              | underlying filesystem operation failed |
+| `parse`           | a stored JSON document could not be parsed |
+| `error`           | generic/uncategorized failure |
+
 ## Useful Commands
 
 ```sh
