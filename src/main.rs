@@ -1842,8 +1842,7 @@ fn cmd_gc(root: &Path, args: GcArgs) -> Result<()> {
         if path.extension() != Some(OsStr::new("lock")) {
             continue;
         }
-        if lock_is_stale(&path)? {
-            let _ = fs::remove_dir_all(&path);
+        if reap_stale_lock(root, &path)? {
             stale_locks += 1;
         }
     }

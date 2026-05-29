@@ -2162,6 +2162,38 @@ fn gc_reaps_stale_orphan_temp_files_but_keeps_fresh_ones() {
     );
 }
 
+fn write_lock(bus: &PathBuf, name: &str, token: &str, expires_at: &str) -> PathBuf {
+    let dir = bus.join("locks").join(format!("{name}.lock"));
+    fs::create_dir_all(&dir).unwrap();
+    let owner = format!(
+        "{{\"v\":1,\"token\":\"{token}\",\"pid\":4321,\"host\":\"test\",\
+         \"acquired_at\":\"2000-01-01T00:00:00Z\",\"expires_at\":\"{expires_at}\"}}\n"
+    );
+    fs::write(dir.join("owner.json"), owner).unwrap();
+    dir
+}
+
+#[test]
+fn gc_reaps_expired_lock_but_keeps_a_live_one() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+
+    let expired = write_lock(&bus, "conversation-c", "tok-old", "2000-01-01T00:00:00Z");
+    let live = write_lock(&bus, "conversation-d", "tok-live", "2999-01-01T00:00:00Z");
+
+    let out = run(&bus, &["gc"]);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("stale_locks=1"),
+        "exactly the expired lock should be reaped; got: {stdout}"
+    );
+    assert!(!expired.exists(), "expired lock should be reaped");
+    assert!(
+        live.exists(),
+        "a lock whose lease is still in the future must never be reaped"
+    );
+}
+
 #[test]
 fn doctor_reports_stale_orphan_temp_files() {
     let bus = temp_bus();

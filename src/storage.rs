@@ -55,9 +55,7 @@ impl DirLock {
                     });
                 }
                 Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {
-                    if lock_is_stale(&path)? {
-                        let _ = fs::remove_dir_all(&path);
-                        let _ = fsync_dir(&root.join("locks"));
+                    if reap_stale_lock(root, &path)? {
                         continue;
                     }
                     if Instant::now() >= deadline {
@@ -254,6 +252,40 @@ pub(crate) fn lock_is_stale(path: &Path) -> Result<bool> {
     Ok(parse_time(&owner.expires_at)
         .map(|expires_at| expires_at < Utc::now())
         .unwrap_or(true))
+}
+
+/// The owner token of a lock instance, or `None` for an orphaned directory with
+/// no readable owner.
+fn lock_owner_token(path: &Path) -> Result<Option<String>> {
+    let owner: Option<LockOwner> = read_json(&path.join("owner.json"))?;
+    Ok(owner.map(|owner| owner.token))
+}
+
+/// Remove a lock directory only if it is still the *same* stale instance we
+/// judged. Reading the owner, deciding it is stale, and deleting the directory
+/// cannot be fused into one atomic step with directory primitives, so we re-read
+/// the owner immediately before the destructive call: if the lock was refreshed
+/// (still the same token but the expiry now lies in the future) or replaced by a
+/// fresh holder (a different token) since we judged it, we leave it alone.
+///
+/// This keeps a lock that is within its lease from being reaped out from under a
+/// live holder — the failure mode of a plain "if stale, remove" — while still
+/// reclaiming genuinely abandoned locks. Returns whether the directory was
+/// removed.
+pub(crate) fn reap_stale_lock(root: &Path, path: &Path) -> Result<bool> {
+    let token_when_judged = lock_owner_token(path)?;
+    if !lock_is_stale(path)? {
+        return Ok(false);
+    }
+    // Final guard, as close to the destructive call as possible.
+    if !lock_is_stale(path)? || lock_owner_token(path)? != token_when_judged {
+        return Ok(false);
+    }
+    let removed = fs::remove_dir_all(path).is_ok();
+    if removed {
+        let _ = fsync_dir(&root.join("locks"));
+    }
+    Ok(removed)
 }
 
 pub(crate) fn set_dir_private(path: &Path) -> Result<()> {

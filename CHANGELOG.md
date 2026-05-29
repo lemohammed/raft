@@ -53,6 +53,12 @@ shell out to `raft` can branch on results reliably.
   `serve`) now reaps `.tmp` files older than 5 minutes — old enough to never
   touch an in-flight write — and reports the count as `orphan_temp_files`.
   `doctor` warns about them under the `orphan_temp_file` code.
+- Lock-reap race: `gc` and lock acquisition judged a lock stale and then deleted
+  it by path, so a lock that was refreshed or released-and-reacquired in the gap
+  could be reaped out from under a live holder. Reaping now re-reads the owner
+  token immediately before deleting and skips the lock if it was refreshed (now
+  unexpired) or replaced (different token), so a lock within its lease is never
+  reclaimed.
 
 ## [0.3.0] - 2026-05-28
 
