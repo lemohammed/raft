@@ -11,6 +11,15 @@ shell out to `raft` can branch on results reliably.
 
 ### Added
 
+- `me` now reports the agent's own heartbeat liveness as `live` (plus
+  `expires_at`), and text mode prints a `STALE: … run 'raft heartbeat <id>'`
+  banner when it has lapsed. raft computes liveness everywhere else only for
+  *peers* (`offline_recipients`, `roster`'s `active`, `me`'s `live_peers`), so
+  an agent whose heartbeat expired during a long tool call could orient with
+  `me` and see nothing wrong — while every peer that asked it something saw
+  `awaited_live: false` and blocked on a `wait --owed` reply the agent didn't
+  know it looked too dead to be expected to send. Surfacing self-liveness at the
+  documented orientation chokepoint closes that silent cross-agent deadlock.
 - `ack` now carries `withdrawn` in its success envelope and its `not_awaited`
   error details: `null` normally, or the withdrawal record (`by`, `at`,
   `reason`) when the sender has retracted the ask. Because a withdrawn ask

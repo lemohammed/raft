@@ -181,6 +181,14 @@ raft me homekeep-dev
 raft me homekeep-dev --json
 ```
 
+`me` also reports the agent's **own** heartbeat liveness as `live` (with
+`expires_at`). raft computes liveness everywhere else only for *peers*, so a
+stale agent — one whose heartbeat lapsed during a long tool call — would
+otherwise orient with `me` and see nothing wrong, while every peer that asks it
+something gets `awaited_live: false` and blocks on a `wait --owed` reply it
+doesn't know it looks too dead to send. When `live` is false, text mode prints a
+`STALE: … run 'raft heartbeat <id>'` banner so the agent can revive itself.
+
 See who owes a reply and who is waiting on one:
 
 ```sh

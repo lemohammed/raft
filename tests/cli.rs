@@ -3629,3 +3629,37 @@ fn ack_of_a_withdrawn_ask_is_distinguishable_from_never_awaited() {
     assert_eq!(fyi_json["was_awaited"], false);
     assert!(fyi_json["withdrawn"].is_null());
 }
+
+#[test]
+fn me_reports_the_agents_own_heartbeat_liveness() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(&bus, &["claim", "alice", "--workspace", "."]);
+
+    // Fresh claim: alice's own heartbeat is live.
+    let fresh: serde_json::Value =
+        serde_json::from_slice(&run(&bus, &["me", "alice", "--json"]).stdout).unwrap();
+    assert_eq!(fresh["live"], true);
+    assert!(fresh["expires_at"].is_string());
+
+    // Expire alice's heartbeat: liveness is computed for the agent itself, not
+    // just peers, so `me` must now report the agent as stale.
+    let alice = bus.join("agents").join("alice.json");
+    let mut agent: serde_json::Value =
+        serde_json::from_slice(&fs::read(&alice).unwrap()).unwrap();
+    agent["expires_at"] = serde_json::json!("2000-01-01T00:00:00Z");
+    fs::write(&alice, serde_json::to_vec(&agent).unwrap()).unwrap();
+
+    let stale: serde_json::Value =
+        serde_json::from_slice(&run(&bus, &["me", "alice", "--json"]).stdout).unwrap();
+    assert_eq!(stale["live"], false);
+
+    // Text mode surfaces an actionable banner pointing at `heartbeat`.
+    let text = run(&bus, &["me", "alice"]);
+    let out = String::from_utf8_lossy(&text.stdout);
+    assert!(out.contains("STALE"), "text `me` should flag a stale self");
+    assert!(
+        out.contains("raft heartbeat alice"),
+        "text `me` should tell the agent how to recover"
+    );
+}

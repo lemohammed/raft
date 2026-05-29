@@ -1530,12 +1530,17 @@ fn cmd_awaiting(root: &Path, args: AwaitingArgs) -> Result<()> {
 fn cmd_me(root: &Path, args: MeArgs) -> Result<()> {
     ensure_root(root)?;
     let agent = validate_id(&args.agent, "agent id")?;
-    if !agent_path(root, &agent).exists() {
+    // Read the agent's own record (not just `.exists()`): liveness in raft is
+    // computed only for *peers* (offline_recipients, roster `active`, this
+    // command's `live_peers`), so a stale agent orienting via `me` would
+    // otherwise see nothing wrong while every peer's `wait --owed` deadlocks on
+    // a reply it doesn't know it looks too dead to be expected to send.
+    let Some(me): Option<Agent> = read_json(&agent_path(root, &agent))? else {
         bail_code!(
             "not_claimed",
             "agent @{agent} is not claimed; use raft claim"
         );
-    }
+    };
 
     // Unread totals and per-conversation counts, from a single visibility scan.
     let messages = visible_messages(root, &agent, None)?;
@@ -1562,6 +1567,9 @@ fn cmd_me(root: &Path, args: MeArgs) -> Result<()> {
 
     // Live peers (other agents whose heartbeat has not expired).
     let now = Utc::now();
+    let self_live = parse_time(&me.expires_at)
+        .map(|expires_at| expires_at >= now)
+        .unwrap_or(false);
     let mut live_peers = Vec::new();
     for entry in sorted_read_dir(&root.join("agents"))? {
         if entry.path().extension() != Some(OsStr::new("json")) {
@@ -1614,6 +1622,8 @@ fn cmd_me(root: &Path, args: MeArgs) -> Result<()> {
             "{}",
             serde_json::to_string_pretty(&serde_json::json!({
                 "agent": agent,
+                "live": self_live,
+                "expires_at": me.expires_at,
                 "unread": unread,
                 "you_owe": you_owe,
                 "owed_to_you": owed_to_you,
@@ -1624,7 +1634,14 @@ fn cmd_me(root: &Path, args: MeArgs) -> Result<()> {
         return Ok(());
     }
 
-    println!("@{agent} — {unread} unread");
+    if self_live {
+        println!("@{agent} — {unread} unread");
+    } else {
+        println!(
+            "@{agent} — STALE: heartbeat expired {}; run 'raft heartbeat {agent}' — {unread} unread",
+            me.expires_at
+        );
+    }
     println!("you owe ({}):", you_owe.len());
     if you_owe.is_empty() {
         println!("  nothing");
