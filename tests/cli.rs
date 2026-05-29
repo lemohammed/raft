@@ -3993,3 +3993,68 @@ fn channel_joiner_is_not_flooded_with_pre_join_broadcasts() {
         serde_json::from_slice(&carol_owes2.stdout).unwrap();
     assert_eq!(carol_owes2_json["you_owe"][0]["message_id"], fresh_id);
 }
+
+#[test]
+fn an_ask_can_require_a_reply_from_one_agent_and_an_ack_from_everyone() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(&bus, &["claim", "asker", "--workspace", "."]);
+    run(&bus, &["claim", "lead", "--workspace", "."]);
+    run(&bus, &["claim", "crew", "--workspace", "."]);
+    run(
+        &bus,
+        &[
+            "conversation", "create", "room", "--participants", "asker,lead,crew",
+            "--starter", "asker",
+        ],
+    );
+
+    // One message that names `lead` for a substantive reply AND asks everyone to
+    // ack. Before unioning the two obligation sources, the non-empty
+    // needs-response-from silently suppressed requires-ack, dropping crew.
+    let sent = run(
+        &bus,
+        &[
+            "send", "--conversation", "room", "--from", "asker", "--to", "*",
+            "--subject", "ship", "--body", "lead drives; everyone ack",
+            "--needs-response-from", "lead", "--requires-ack",
+        ],
+    );
+    let msg_id = String::from_utf8_lossy(&sent.stdout).trim().to_string();
+
+    // Both lead and crew are awaited, each with the right obligation kind.
+    let waiting = run(&bus, &["awaiting", "asker", "--json"]);
+    let waiting_json: serde_json::Value = serde_json::from_slice(&waiting.stdout).unwrap();
+    let owed = waiting_json["owed_to_you"].as_array().unwrap();
+    let mut by_agent: std::collections::BTreeMap<String, String> = Default::default();
+    for ask in owed {
+        assert_eq!(ask["message_id"], serde_json::json!(msg_id));
+        by_agent.insert(
+            ask["awaited"].as_str().unwrap().to_string(),
+            ask["await_kind"].as_str().unwrap().to_string(),
+        );
+    }
+    assert_eq!(by_agent.get("lead").map(String::as_str), Some("needs_response"));
+    assert_eq!(by_agent.get("crew").map(String::as_str), Some("requires_ack"));
+
+    // crew's bare ack closes only crew's obligation; lead still owes a reply, so
+    // the asker is not yet fully satisfied.
+    run(&bus, &["read", "crew", &msg_id]);
+    run(&bus, &["ack", "crew", &msg_id, "--status", "done"]);
+    let after_crew = run(&bus, &["awaiting", "asker", "--json"]);
+    let after_crew_json: serde_json::Value = serde_json::from_slice(&after_crew.stdout).unwrap();
+    let still_owed: Vec<&str> = after_crew_json["owed_to_you"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|ask| ask["awaited"].as_str().unwrap())
+        .collect();
+    assert_eq!(still_owed, vec!["lead"], "crew's ack must not close lead's reply");
+
+    // lead's terminal reply finally clears the asker.
+    run(&bus, &["read", "lead", &msg_id]);
+    run(&bus, &["ack", "lead", &msg_id, "--status", "done"]);
+    let done = run(&bus, &["awaiting", "asker", "--json"]);
+    let done_json: serde_json::Value = serde_json::from_slice(&done.stdout).unwrap();
+    assert!(done_json["owed_to_you"].as_array().unwrap().is_empty());
+}

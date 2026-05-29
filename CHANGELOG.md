@@ -11,6 +11,17 @@ shell out to `raft` can branch on results reliably.
 
 ### Fixed
 
+- A message that set both `--needs-response-from` and `--requires-ack` silently
+  dropped the ack requirement: `message_awaited` picked exactly one source via
+  `if/else if`, so a non-empty `needs_response_from` suppressed `requires_ack`
+  entirely. An ask like "@b please reply, everyone ack" awaited only `b`; every
+  other recipient owed nothing, was absent from `awaiting`/`me`/`wait --owed`,
+  and the asker's `wait --owed` closed the moment `b` replied even though no one
+  else had acked. The send envelope still echoed both flags as set, so the
+  asker had no signal the requirement was dropped. The two obligation sources
+  now union (deduped, same self/`*`/membership filters), and `await_kind` is
+  computed per awaited agent (`needs_response` wins for an agent named in both,
+  since a reply subsumes an ack).
 - `watch` no longer silently drops an unread message whose id sorts below its
   resume cursor. Message ids are not monotonic across processes within a
   millisecond, but the watch loop used a scalar high-water cursor as its sole

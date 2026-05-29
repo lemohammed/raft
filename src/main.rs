@@ -1404,14 +1404,14 @@ fn ask_is_terminal(status: &str) -> bool {
     TERMINAL_ACK_STATUSES.contains(&status)
 }
 
-/// Why an agent is on a message's awaited set, mirroring `message_awaited`'s
-/// branch order: a `--needs-response-from` name means the sender wants a
-/// substantive reply, while `--requires-ack` means a bare acknowledgement
-/// closes it. `message_awaited` derives the set from exactly one of these, so a
-/// single label describes the whole set. Only meaningful when the awaited set is
-/// non-empty (the only context in which an `OpenAsk` is built).
-fn await_kind(message: &Message) -> &'static str {
-    if !message.needs_response_from.is_empty() {
+/// Why a specific agent is on a message's awaited set. A `--needs-response-from`
+/// name owes a substantive reply; a bare `--requires-ack` recipient owes only an
+/// acknowledgement. The two are independent flags that may both be set on one
+/// message (see `message_awaited`), so the label is per-agent, not per-message:
+/// `needs_response` wins for an agent named in both, since a reply is the
+/// stronger obligation and subsumes an ack.
+fn await_kind_for(message: &Message, agent: &str) -> &'static str {
+    if message.needs_response_from.iter().any(|who| who == agent) {
         "needs_response"
     } else {
         "requires_ack"
@@ -1438,13 +1438,15 @@ fn message_awaited(message: &Message, meta: &Meta) -> Vec<String> {
     if message.withdrawn.is_some() {
         return Vec::new();
     }
-    let awaited = if !message.needs_response_from.is_empty() {
-        message.needs_response_from.clone()
-    } else if message.requires_ack {
-        receipt_recipients(message, meta)
-    } else {
-        return Vec::new();
-    };
+    // The two obligation sources are independent and may both be set: every
+    // recipient owes an ack when `requires_ack`, and each `needs_response_from`
+    // name additionally owes a substantive reply. Union them so a "@b please
+    // reply, everyone ack" message strands neither requirement (a non-empty
+    // `needs_response_from` previously suppressed `requires_ack` entirely).
+    let mut awaited: BTreeSet<String> = message.needs_response_from.iter().cloned().collect();
+    if message.requires_ack {
+        awaited.extend(receipt_recipients(message, meta));
+    }
     awaited
         .into_iter()
         .filter(|agent| {
@@ -1545,6 +1547,7 @@ pub(crate) fn gather_open_asks(
                     continue;
                 }
                 let awaited_live = live.contains(&who);
+                let await_kind = await_kind_for(&message, &who);
                 asks.push(OpenAsk {
                     conversation_id: meta.id.clone(),
                     message_id: message.id.clone(),
@@ -1554,7 +1557,7 @@ pub(crate) fn gather_open_asks(
                     created_at: message.created_at.clone(),
                     status: status.unwrap_or_else(|| "none".to_string()),
                     awaited_live,
-                    await_kind: await_kind(&message),
+                    await_kind,
                 });
             }
         }
@@ -2126,7 +2129,7 @@ fn resolved_ask_already_closed(
                 created_at: message.created_at.clone(),
                 status,
                 awaited_live: live_agent_ids(root)?.contains(who),
-                await_kind: await_kind(&message),
+                await_kind: await_kind_for(&message, who),
             };
             return emit_resolution(args, Some((ask, note)));
         }
@@ -2425,7 +2428,7 @@ fn cmd_read(root: &Path, args: ReadArgs) -> Result<()> {
         }
         println!("\n{}", message.body);
         if view.awaiting_me {
-            let wants = if await_kind(message) == "needs_response" {
+            let wants = if await_kind_for(message, &agent_id) == "needs_response" {
                 "reply"
             } else {
                 "ack"

@@ -126,6 +126,13 @@ raft send \
   --needs-response-from homekeep-dev
 ```
 
+The two obligation flags are independent and compose: `--requires-ack` makes
+every recipient owe an acknowledgement, while each `--needs-response-from` name
+additionally owes a substantive reply. A message can carry both — "everyone
+ack, and @homekeep-dev specifically reply" — and each awaited agent reports its
+own `await_kind` (`requires_ack` or `needs_response`); the ask stays open until
+*all* of them are discharged.
+
 Replying is a one-liner: `reply` takes a message id and inherits that message's
 conversation, thread position (`after`), and subject, defaulting the recipient
 to the original sender. Override `--to`, `--subject`, `--requires-ack`, or
@@ -215,10 +222,12 @@ A blocked asker can branch on it directly — an ask whose delegate is offline
 (`awaited_live: false`) is a candidate to re-route or escalate rather than keep
 waiting on. Text output flags it as `@agent (offline)`.
 
-Each open ask also carries `await_kind`: `"needs_response"` when the ask came
-from `--needs-response-from` (the sender wants a substantive reply) or
-`"requires_ack"` when it came from `--requires-ack` (a bare acknowledgement
-suffices). An agent triaging its `you_owe` list can branch on this to decide
+Each open ask also carries `await_kind`, derived per awaited agent (one message
+that both names a responder and requires acks yields a `needs_response` ask for
+the named agent and `requires_ack` asks for the rest): `"needs_response"` means
+that agent was named in `--needs-response-from` (the sender wants a substantive
+reply), `"requires_ack"` means it owes only the bare `--requires-ack`
+acknowledgement. An agent triaging its `you_owe` list can branch on this to decide
 whether to compose a `reply` or just `ack` — either way the ask closes when a
 terminal `done`/`rejected` receipt is recorded (use `reply --ack` to do both at
 once). Text output shows it as `wants reply` / `wants ack`.
