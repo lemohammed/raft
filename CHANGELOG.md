@@ -11,6 +11,17 @@ shell out to `raft` can branch on results reliably.
 
 ### Fixed
 
+- `watch` no longer silently drops an unread message whose id sorts below its
+  resume cursor. Message ids are not monotonic across processes within a
+  millisecond, but the watch loop used a scalar high-water cursor as its sole
+  dedup and skipped anything `id <= cursor` — so a still-unread message that
+  became visible after the cursor advanced (e.g. a second agent writing into the
+  same channel in the same millisecond) was skipped forever. Under the default
+  (auto-read) the dedup is now the read receipt, and an in-session set guards
+  exact-once delivery regardless of id ordering; the persisted cursor is demoted
+  to a soft resume floor that applies only to state-change notices and
+  `--no-auto-read` (where no receipt exists). An explicit `--since` stays a hard
+  floor.
 - `read` (and `watch` auto-read) no longer downgrades an explicit ack. A `read`
   receipt is the weakest status, but `write_receipt` previously overwrote the
   current status unconditionally — so re-reading (or auto-reading via `watch`) a

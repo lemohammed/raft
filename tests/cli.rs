@@ -3862,3 +3862,56 @@ fn read_reports_that_an_ask_is_still_owed_after_reading() {
     assert_eq!(after_view["awaiting_me"], false);
     assert_eq!(after_view["my_status"], "done");
 }
+
+#[test]
+fn watch_emits_a_late_message_whose_id_sorts_below_the_cursor() {
+    // Message ids are not monotonic across processes within a millisecond, so a
+    // genuinely unread message can surface with an id lexically lower than one
+    // watch already emitted. Under the default (auto-read), read receipts — not
+    // the id cursor — must be the dedup, so such a message is never lost.
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(
+        &bus,
+        &["conversation", "create", "c", "--participants", "a,b", "--starter", "a"],
+    );
+    let sent = run(
+        &bus,
+        &["send", "--conversation", "c", "--from", "a", "--to", "b", "--body", "high id"],
+    );
+    let high_id = String::from_utf8_lossy(&sent.stdout).trim().to_string();
+
+    // First watch emits the high-id message and advances the cursor to it.
+    let first = run(&bus, &["watch", "--agent", "b", "--conversation", "c", "--once"]);
+    assert!(String::from_utf8_lossy(&first.stdout).contains(&high_id));
+    let state: serde_json::Value =
+        serde_json::from_slice(&fs::read(bus.join("watch/b.json")).unwrap()).unwrap();
+    assert_eq!(state["last_event_id"], high_id);
+
+    // Craft a still-unread message addressed to b whose id sorts BELOW the
+    // cursor, as a second concurrent writer could have produced in the same ms.
+    let messages_dir = bus.join("conversations/c/messages");
+    let template: serde_json::Value =
+        serde_json::from_slice(&fs::read(messages_dir.join(format!("{high_id}.json"))).unwrap())
+            .unwrap();
+    let low_id = "m-20000101T000000000-0000";
+    let mut crafted = template.clone();
+    crafted["id"] = serde_json::json!(low_id);
+    crafted["body"] = serde_json::json!("low id but newly arrived");
+    fs::write(
+        messages_dir.join(format!("{low_id}.json")),
+        serde_json::to_vec(&crafted).unwrap(),
+    )
+    .unwrap();
+
+    // The low-id message is below the persisted cursor but unread; auto-read
+    // watch must still deliver it (the old scalar-cursor logic dropped it).
+    let second = run(&bus, &["watch", "--agent", "b", "--conversation", "c", "--once"]);
+    let out = String::from_utf8_lossy(&second.stdout);
+    assert!(
+        out.contains(low_id),
+        "watch must not skip an unread message whose id sorts below the cursor; got: {out:?}"
+    );
+    // And it does not re-emit the already-read high-id message.
+    assert!(!out.contains(&high_id), "already-read message must not re-emit");
+}

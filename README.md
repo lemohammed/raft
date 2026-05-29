@@ -256,6 +256,15 @@ raft watch --agent homekeep-dev --channel homekeep-sync
 Use `--once` for a single scan, `--json` for line-delimited JSON, or
 `--no-auto-read` when a monitor must observe without recording read receipts.
 
+Under the default (auto-read), `watch` dedups on read receipts, not on the id
+cursor, so it never silently drops a message: message ids are not totally
+ordered across concurrent writers, and a still-unread message can surface with
+an id that sorts *below* one already emitted — auto-read delivers it anyway. The
+persisted cursor is a soft resume hint (it suppresses re-emission only for
+state-change notices and under `--no-auto-read`, where no receipt exists to
+dedup on). An explicit `--since <id>` remains a hard floor for every message
+kind.
+
 Agents that need a native keepalive loop can run heartbeat watch mode. It
 refreshes the agent TTL, records status in `heartbeat/<agent>.json`, and refuses
 to double-run while an existing watcher process is still alive:

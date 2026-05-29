@@ -21,7 +21,7 @@ use chrono::{DateTime, TimeDelta, Utc};
 use clap::Parser;
 use signal_hook::consts::signal::{SIGINT, SIGTERM};
 use signal_hook::flag as signal_flag;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::env;
 use std::ffi::OsStr;
 use std::fs;
@@ -2108,7 +2108,17 @@ fn cmd_watch(root: &Path, args: WatchArgs) -> Result<()> {
         .map(|id| validate_id(id, "message id"))
         .transpose()?;
     ensure_root(root)?;
-    let mut state = start_watch_state(root, &agent_id, since)?;
+    // An explicit `--since` is a hard floor: the caller has declared everything
+    // up to that id handled, so suppress it for every message kind. The resume
+    // cursor persisted by a prior run is only a soft floor (see below).
+    let since_floor = since.clone();
+    let (mut state, resume_floor) = start_watch_state(root, &agent_id, since)?;
+    // Exact in-session dedup, independent of id ordering. Message ids are not
+    // monotonic across processes within a millisecond, so a scalar high-water
+    // cursor alone could skip a low-id message that only becomes visible after
+    // the cursor advanced; the set guarantees we emit each message at most once
+    // per run regardless of arrival order.
+    let mut seen: HashSet<String> = HashSet::new();
     let deadline = if args.timeout == 0 {
         None
     } else {
@@ -2128,18 +2138,36 @@ fn cmd_watch(root: &Path, args: WatchArgs) -> Result<()> {
         rows.sort_by(|left, right| left.id.cmp(&right.id));
         let mut emitted = false;
         for message in rows {
-            if let Some(last_event_id) = state.last_event_id.as_deref()
-                && message.id.as_str() <= last_event_id
+            if seen.contains(&message.id) {
+                continue;
+            }
+            // Explicit `--since`: a hard floor for every message kind.
+            if let Some(floor) = since_floor.as_deref()
+                && message.id.as_str() <= floor
             {
                 continue;
             }
-            let should_emit = message_is_unread(root, &message, &agent_id)
-                || args.state_changes && is_state_change_message(&message);
+            let is_state_change = is_state_change_message(&message);
+            let should_emit =
+                message_is_unread(root, &message, &agent_id) || args.state_changes && is_state_change;
             if !should_emit {
                 continue;
             }
+            // The persisted resume cursor is only a *soft* floor. Applying it to
+            // receipt-deduped normal messages would let a non-monotonic id
+            // silently drop a still-unread message, so honor it only where no
+            // read receipt provides dedup: state-change notices (never
+            // receipted) and `--no-auto-read` (receipts deliberately skipped).
+            // Under the default auto-read, `message_is_unread` already prevents
+            // re-emitting anything previously read, so a low id is safe to emit.
+            if let Some(floor) = resume_floor.as_deref()
+                && message.id.as_str() <= floor
+                && (is_state_change || args.no_auto_read)
+            {
+                continue;
+            }
             emit_watch_message(root, &message, &agent_id, args.json)?;
-            if !args.no_auto_read && !is_state_change_message(&message) {
+            if !args.no_auto_read && !is_state_change {
                 let _lock = DirLock::acquire(
                     root,
                     &format!("conversation-{}", message.conversation_id),
@@ -2148,7 +2176,16 @@ fn cmd_watch(root: &Path, args: WatchArgs) -> Result<()> {
                 )?;
                 write_receipt(root, &agent_id, &message, "read", None)?;
             }
-            state.last_event_id = Some(message.id.clone());
+            seen.insert(message.id.clone());
+            // Persist a high-water mark for cross-restart resume. It only ever
+            // advances, and on the next run it returns as the soft `resume_floor`.
+            if state
+                .last_event_id
+                .as_deref()
+                .map_or(true, |high| message.id.as_str() > high)
+            {
+                state.last_event_id = Some(message.id.clone());
+            }
             state.updated_at = iso_now();
             atomic_write_json(&watch_state_path(root, &agent_id), &state)?;
             emitted = true;
@@ -2965,10 +3002,20 @@ fn is_state_change_message(message: &Message) -> bool {
     message.kind == "system" && message.subject == "state changed"
 }
 
-fn start_watch_state(root: &Path, agent_id: &str, since: Option<String>) -> Result<WatchState> {
+/// Initialize the watch state for this run and return it alongside the prior
+/// run's resume cursor. The resume cursor is reported separately from `--since`
+/// because they are floors of different strength: an explicit `--since` is a
+/// hard floor the caller chose, while the persisted resume cursor is only a soft
+/// floor (see `cmd_watch`) that must never silently drop a still-unread message.
+fn start_watch_state(
+    root: &Path,
+    agent_id: &str,
+    since: Option<String>,
+) -> Result<(WatchState, Option<String>)> {
     let previous: Option<WatchState> = read_json(&watch_state_path(root, agent_id))?;
+    let resume_floor = previous.and_then(|state| state.last_event_id);
     let now = iso_now();
-    let last_event_id = since.or_else(|| previous.and_then(|state| state.last_event_id));
+    let last_event_id = since.or_else(|| resume_floor.clone());
     let state = WatchState {
         v: SCHEMA_VERSION,
         agent: agent_id.to_string(),
@@ -2980,7 +3027,7 @@ fn start_watch_state(root: &Path, agent_id: &str, since: Option<String>) -> Resu
         shutdown_at: None,
     };
     atomic_write_json(&watch_state_path(root, agent_id), &state)?;
-    Ok(state)
+    Ok((state, resume_floor))
 }
 
 fn emit_watch_message(root: &Path, message: &Message, agent_id: &str, json: bool) -> Result<()> {
