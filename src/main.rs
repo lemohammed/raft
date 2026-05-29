@@ -1,17 +1,19 @@
 #[macro_use]
 mod error;
 mod cli;
+mod types;
 mod ui_html;
 mod util;
 
 use crate::cli::*;
 use crate::error::{RaftError, Result};
+use crate::types::*;
 use crate::ui_html::UI_HTML;
 use crate::util::*;
 use chrono::{DateTime, TimeDelta, Utc};
 use clap::Parser;
 use serde::de::DeserializeOwned;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use signal_hook::consts::signal::{SIGINT, SIGTERM};
 use signal_hook::flag as signal_flag;
 use std::collections::{BTreeMap, BTreeSet};
@@ -36,164 +38,6 @@ const LOCK_TTL_SECONDS: u64 = 30;
 const LOCK_TIMEOUT_SECONDS: u64 = 5;
 const SERVE_LOCK_TTL_SECONDS: u64 = 30;
 pub(crate) const SCHEMA_VERSION: u16 = 1;
-
-#[derive(Serialize, Deserialize, Clone)]
-struct Agent {
-    #[serde(rename = "_v", default = "schema_v1")]
-    v: u16,
-    id: String,
-    #[serde(default)]
-    mention: String,
-    workspace: Option<String>,
-    capabilities: Vec<String>,
-    pid: u32,
-    host: String,
-    last_seen_at: String,
-    ttl_seconds: u64,
-    expires_at: String,
-    #[serde(default = "default_agent_state")]
-    current_state: String,
-    #[serde(default)]
-    state_note: Option<String>,
-    #[serde(default = "iso_now")]
-    state_updated_at: String,
-}
-
-#[derive(Serialize, Deserialize, Clone)]
-struct Rate {
-    window_seconds: u64,
-    max_messages_per_sender: u64,
-    max_message_bytes: usize,
-}
-
-#[derive(Serialize, Deserialize, Clone)]
-struct Meta {
-    #[serde(rename = "_v", default = "schema_v1")]
-    v: u16,
-    id: String,
-    participants: Vec<String>,
-    #[serde(default)]
-    channel: bool,
-    private: bool,
-    state: String,
-    created_at: String,
-    updated_at: String,
-    retention_days: u64,
-    rate: Rate,
-}
-
-#[derive(Serialize, Deserialize, Clone)]
-struct Message {
-    #[serde(rename = "_v", default = "schema_v1")]
-    v: u16,
-    id: String,
-    conversation_id: String,
-    kind: String,
-    from: String,
-    to: Vec<String>,
-    #[serde(default)]
-    mentions: Vec<String>,
-    subject: String,
-    body: String,
-    created_at: String,
-    requires_ack: bool,
-    #[serde(default)]
-    needs_response_from: Vec<String>,
-    #[serde(default)]
-    subject_id: Option<String>,
-    after: Option<String>,
-}
-
-#[derive(Serialize, Deserialize)]
-struct RateState {
-    #[serde(rename = "_v", default = "schema_v1")]
-    v: u16,
-    senders: BTreeMap<String, SenderRate>,
-}
-
-impl Default for RateState {
-    fn default() -> Self {
-        Self {
-            v: SCHEMA_VERSION,
-            senders: BTreeMap::new(),
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize)]
-struct SenderRate {
-    window_start: String,
-    count: u64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    last_sent_at: Option<String>,
-}
-
-#[derive(Serialize, Deserialize, Clone)]
-struct ReceiptEvent {
-    status: String,
-    at: String,
-    note: Option<String>,
-}
-
-#[derive(Serialize, Deserialize, Clone)]
-struct Receipt {
-    #[serde(rename = "_v", default = "schema_v1")]
-    v: u16,
-    message_id: String,
-    conversation_id: String,
-    agent: String,
-    status: String,
-    updated_at: String,
-    note: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    read_at: Option<String>,
-    history: Vec<ReceiptEvent>,
-}
-
-#[derive(Serialize, Deserialize, Clone)]
-struct WatchState {
-    #[serde(rename = "_v", default = "schema_v1")]
-    v: u16,
-    agent: String,
-    pid: u32,
-    host: String,
-    started_at: String,
-    updated_at: String,
-    last_event_id: Option<String>,
-    shutdown_at: Option<String>,
-}
-
-#[derive(Serialize, Deserialize, Clone)]
-struct HeartbeatState {
-    #[serde(rename = "_v", default = "schema_v1")]
-    v: u16,
-    agent: String,
-    pid: u32,
-    host: String,
-    started_at: String,
-    updated_at: String,
-    last_heartbeat_at: String,
-    interval_seconds: f64,
-    ttl_seconds: u64,
-    shutdown_at: Option<String>,
-}
-
-#[derive(Serialize)]
-struct ThreadNode {
-    message: Message,
-    children: Vec<ThreadNode>,
-}
-
-#[derive(Serialize, Deserialize)]
-struct LockOwner {
-    #[serde(rename = "_v", default = "schema_v1")]
-    v: u16,
-    token: String,
-    pid: u32,
-    host: String,
-    acquired_at: String,
-    expires_at: String,
-}
 
 #[derive(Serialize)]
 struct DoctorReport {
@@ -269,144 +113,6 @@ struct DoctorIssue {
     code: String,
     path: String,
     message: String,
-}
-
-#[derive(Serialize)]
-struct UiSnapshot {
-    root: String,
-    agent: String,
-    generated_at: String,
-    totals: UiTotals,
-    agents: Vec<UiAgent>,
-    conversations: Vec<UiConversation>,
-}
-
-#[derive(Serialize)]
-struct UiTotals {
-    active_agents: usize,
-    stale_agents: usize,
-    conversations: usize,
-    unread_messages: usize,
-    messages: usize,
-}
-
-#[derive(Serialize)]
-struct UiAgent {
-    id: String,
-    mention: String,
-    workspace: Option<String>,
-    capabilities: Vec<String>,
-    current_state: String,
-    state_note: Option<String>,
-    state_updated_at: String,
-    last_seen_at: String,
-    expires_at: String,
-    active: bool,
-}
-
-#[derive(Serialize)]
-struct UiConversation {
-    id: String,
-    participants: Vec<String>,
-    channel: bool,
-    private: bool,
-    joined: bool,
-    message_count: usize,
-    unread_count: usize,
-    open_asks: usize,
-    latest_at: Option<String>,
-    messages: Vec<UiMessage>,
-}
-
-#[derive(Serialize)]
-struct UiMessage {
-    id: String,
-    kind: String,
-    from: String,
-    to: Vec<String>,
-    mentions: Vec<String>,
-    subject: String,
-    body: String,
-    created_at: String,
-    requires_ack: bool,
-    needs_response_from: Vec<String>,
-    unread: bool,
-    after: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct UiSendRequest {
-    agent: String,
-    conversation: Option<String>,
-    channel: Option<String>,
-    to: String,
-    #[serde(default)]
-    subject: String,
-    body: String,
-    #[serde(default = "default_message_kind")]
-    kind: String,
-    #[serde(default)]
-    requires_ack: bool,
-    #[serde(default)]
-    needs_response_from: Vec<String>,
-    #[serde(default)]
-    after: Option<String>,
-    #[serde(default)]
-    subject_id: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct UiOpenRequest {
-    agent: String,
-    to: String,
-    #[serde(default)]
-    topic: String,
-}
-
-#[derive(Deserialize)]
-struct UiChannelRequest {
-    agent: String,
-    channel: String,
-    #[serde(default)]
-    members: String,
-}
-
-#[derive(Deserialize)]
-struct UiJoinRequest {
-    agent: String,
-    channel: String,
-}
-
-struct SendMessageInput {
-    conversation_id: String,
-    sender: String,
-    to: String,
-    subject: String,
-    body: String,
-    kind: String,
-    after: Option<String>,
-    subject_id: Option<String>,
-    requires_ack: bool,
-    needs_response_from: String,
-}
-
-struct HttpRequest {
-    method: String,
-    target: String,
-    headers: Vec<(String, String)>,
-    body: Vec<u8>,
-}
-
-#[derive(Serialize)]
-struct JournalEntry {
-    #[serde(rename = "_v")]
-    v: u16,
-    id: String,
-    agent: String,
-    kind: String,
-    subject: String,
-    body: String,
-    created_at: String,
 }
 
 struct DirLock {
@@ -1151,16 +857,6 @@ fn send_message(root: &Path, input: SendMessageInput) -> Result<String> {
     Ok(message_id)
 }
 
-#[derive(Serialize, Clone)]
-struct OpenAsk {
-    conversation_id: String,
-    message_id: String,
-    from: String,
-    awaited: String,
-    subject: String,
-    created_at: String,
-    status: String,
-}
 
 fn ask_is_terminal(status: &str) -> bool {
     matches!(status, "done" | "rejected")
