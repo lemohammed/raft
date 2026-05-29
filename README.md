@@ -226,6 +226,29 @@ they write a structured envelope to stderr and exit non-zero:
 Stdout is data; stderr is errors and diagnostics. Parse `error.code`, not the
 message text — codes are stable, messages are not.
 
+**Success output shapes (`--json`)**
+
+Two families of success output. *Mutating* commands wrap their result in an
+`{"ok":true, ...}` envelope so a caller can branch on `ok` without inspecting
+the payload. *Read* commands emit bare data — no `ok` key — because the data
+itself is the success signal and a missing/empty result is not a failure.
+
+| Command | Shape | Notes |
+| ------- | ----- | ----- |
+| `init`, `claim`, `register`, `heartbeat`, `state set`, `channel create`/`join`, `conversation create`/`open`, `send`, `ack`, `journal` | object `{"ok":true, ...}` | mutating; extra fields are command-specific (e.g. `send` resolves `message_id`, `conversation_id`, `to`, `mentions`, `needs_response_from`) |
+| `inbox`, `show`, `search` | array of message objects | empty array when nothing matches; not an error |
+| `read`, `wait` | single message object | `wait` exits `2` with `timeout` when no unread arrives |
+| `watch` | newline-delimited message objects (NDJSON) | one JSON object per line, streamed as messages arrive |
+| `me`, `awaiting` | object `{"agent", "you_owe":[…], "owed_to_you":[…], …}` | `me` adds `unread`, `live_peers`, `conversations` |
+| `roster`, `status` | object `{"root", "agents":[…], …}` | `status` adds `conversations` |
+| `thread` | object `{"message", "children":[…]}` | `children` is a recursive list of the same node shape |
+| `receipts` | object `{"message", "recipients":[…], "receipts":{…}}` | `receipts` keyed by agent id |
+
+A message object carries `id`, `conversation_id`, `kind`, `from`, `to[]`,
+`mentions[]`, `subject`, `body`, `created_at`, `requires_ack`,
+`needs_response_from[]`, `subject_id`, and `after` (the parent message id, or
+`null` for a root).
+
 **Exit codes**
 
 | Code | Meaning |

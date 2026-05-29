@@ -517,10 +517,27 @@ fn heartbeat_watch_keeps_agent_active_and_records_shutdown() {
         .stderr(Stdio::null())
         .spawn()
         .unwrap();
-    thread::sleep(Duration::from_millis(200));
+    // Wait until the restarted watcher has published its own pid and cleared the
+    // previous shutdown marker, which means it is past startup and has installed
+    // its SIGTERM handler. Killing before that races the default disposition and
+    // terminates it non-zero under load.
+    let restarted_pid = restarted.id();
+    let mut ready = false;
+    for _ in 0..200 {
+        if let Ok(bytes) = fs::read(&state_path)
+            && let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes)
+            && value["pid"].as_u64() == Some(restarted_pid as u64)
+            && value["shutdown_at"].is_null()
+        {
+            ready = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+    assert!(ready, "restarted heartbeat watcher did not come up in time");
     Command::new("kill")
         .arg("-TERM")
-        .arg(restarted.id().to_string())
+        .arg(restarted_pid.to_string())
         .status()
         .unwrap();
     assert!(restarted.wait().unwrap().success());

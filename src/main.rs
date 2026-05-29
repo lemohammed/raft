@@ -416,6 +416,13 @@ fn cmd_heartbeat_watch(
             existing.pid
         );
     }
+    // Install signal handlers before publishing our pid so a SIGTERM that lands
+    // during startup is caught and turned into a graceful shutdown instead of
+    // hitting the default disposition and killing us mid-init.
+    let shutdown = Arc::new(AtomicBool::new(false));
+    signal_flag::register(SIGTERM, Arc::clone(&shutdown))?;
+    signal_flag::register(SIGINT, Arc::clone(&shutdown))?;
+
     let started_at = iso_now();
     let mut state = HeartbeatState {
         v: SCHEMA_VERSION,
@@ -431,10 +438,6 @@ fn cmd_heartbeat_watch(
     };
     atomic_write_json(&state_path, &state)?;
     drop(_lock);
-
-    let shutdown = Arc::new(AtomicBool::new(false));
-    signal_flag::register(SIGTERM, Arc::clone(&shutdown))?;
-    signal_flag::register(SIGINT, Arc::clone(&shutdown))?;
 
     loop {
         let agent = heartbeat_once(root, agent_id, Some(ttl), false)?;

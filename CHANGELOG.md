@@ -32,6 +32,10 @@ shell out to `raft` can branch on results reliably.
   fresh creation from an `--if-missing` no-op.
 - Exit/error codes and the JSON output contract are documented in `raft --help`
   (long help) and the README.
+- README documents the success output shape of every `--json` command: which
+  commands return the `{"ok":true, ...}` mutating envelope versus bare read data
+  (arrays of messages, single messages, NDJSON streams, or structured objects),
+  so a caller can pick the right parse path per command.
 
 ### Changed
 
@@ -53,6 +57,12 @@ shell out to `raft` can branch on results reliably.
   `serve`) now reaps `.tmp` files older than 5 minutes — old enough to never
   touch an in-flight write — and reports the count as `orphan_temp_files`.
   `doctor` warns about them under the `orphan_temp_file` code.
+- Heartbeat-watch startup signal race: `heartbeat --watch` published its pid and
+  released the startup lock before installing its `SIGTERM`/`SIGINT` handlers, so
+  a stop signal arriving during init hit the default disposition and killed the
+  watcher mid-startup (no `shutdown_at` recorded, non-zero exit). Handlers are now
+  registered before the pid is published, so an early stop is always a graceful
+  shutdown.
 - Lock-reap race: `gc` and lock acquisition judged a lock stale and then deleted
   it by path, so a lock that was refreshed or released-and-reacquired in the gap
   could be reaped out from under a live holder. Reaping now re-reads the owner
