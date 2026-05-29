@@ -11,6 +11,13 @@ shell out to `raft` can branch on results reliably.
 
 ### Added
 
+- `rate_limited` and `too_large` send errors now carry structured `details` in
+  the `--json` error envelope. `rate_limited` adds `retry_after_seconds` (until
+  the sender's window resets), `window_seconds`, `max_messages_per_sender`, and
+  `count`; `too_large` adds `size` and `limit`. Previously an agent that hit
+  either limit got only a human-readable message string and had to either
+  regex it or busy-retry; it can now compute a precise backoff or trim to the
+  exact byte bound without a second round-trip.
 - `send`/`reply` now return `offline_recipients[]` — resolved recipients whose
   heartbeat has expired (a `*` recipient expands to participants; the sender is
   excluded). Previously a send to a crashed or expired peer returned a plain

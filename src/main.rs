@@ -2576,11 +2576,17 @@ fn enforce_rate_limit(
 ) -> Result<()> {
     let size = body.len();
     if size > meta.rate.max_message_bytes {
-        bail_code!(
+        return Err(RaftError::coded(
             "too_large",
-            "message is {size} bytes; limit is {}",
-            meta.rate.max_message_bytes
-        );
+            format!(
+                "message is {size} bytes; limit is {}",
+                meta.rate.max_message_bytes
+            ),
+        )
+        .with_details(serde_json::json!({
+            "size": size,
+            "limit": meta.rate.max_message_bytes,
+        })));
     }
     let path = conv.join("rate.json");
     let mut state: RateState = read_json(&path)?.unwrap_or_default();
@@ -2600,13 +2606,21 @@ fn enforce_rate_limit(
         entry.count = 0;
     }
     if entry.count >= meta.rate.max_messages_per_sender {
-        bail_code!(
+        let elapsed = (now - parse_time(&entry.window_start).unwrap_or(now)).num_seconds();
+        let retry_after_seconds = (meta.rate.window_seconds as i64 - elapsed).max(0);
+        return Err(RaftError::coded(
             "rate_limited",
-            "rate limited: {rate_key:?} already sent {} messages in {}s for {:?}",
-            meta.rate.max_messages_per_sender,
-            meta.rate.window_seconds,
-            meta.id
-        );
+            format!(
+                "rate limited: {rate_key:?} already sent {} messages in {}s for {:?}",
+                meta.rate.max_messages_per_sender, meta.rate.window_seconds, meta.id
+            ),
+        )
+        .with_details(serde_json::json!({
+            "window_seconds": meta.rate.window_seconds,
+            "max_messages_per_sender": meta.rate.max_messages_per_sender,
+            "count": entry.count,
+            "retry_after_seconds": retry_after_seconds,
+        })));
     }
     entry.count += 1;
     entry.last_sent_at = Some(iso_now());

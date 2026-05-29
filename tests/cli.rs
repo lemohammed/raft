@@ -3346,3 +3346,67 @@ fn send_envelope_flags_offline_recipients() {
         "stdout should carry only the message id"
     );
 }
+
+#[test]
+fn rate_limit_and_size_errors_carry_recovery_details() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(&bus, &["claim", "alice", "--workspace", "."]);
+    run(&bus, &["claim", "bob", "--workspace", "."]);
+    run(
+        &bus,
+        &[
+            "conversation", "create", "c", "--participants", "alice,bob",
+            "--starter", "alice", "--rate-max", "2", "--rate-window", "60",
+            "--max-message-bytes", "10",
+        ],
+    );
+
+    // An over-size message reports the exact size and limit so a caller can
+    // trim and retry without guessing the bound.
+    let too_large = run_fail(
+        &bus,
+        &[
+            "send", "--conversation", "c", "--from", "alice", "--to", "bob",
+            "--subject", "x", "--body", "this body is way too long", "--json",
+        ],
+    );
+    let big: serde_json::Value = serde_json::from_slice(&too_large.stderr).unwrap();
+    assert_eq!(big["error"]["code"], "too_large");
+    assert_eq!(big["error"]["size"], 25);
+    assert_eq!(big["error"]["limit"], 10);
+
+    // Exhaust the window, then the third small send is rate-limited and carries
+    // a retry_after_seconds an agent can back off on instead of busy-retrying.
+    run(
+        &bus,
+        &[
+            "send", "--conversation", "c", "--from", "alice", "--to", "bob",
+            "--subject", "a", "--body", "hi", "--json",
+        ],
+    );
+    run(
+        &bus,
+        &[
+            "send", "--conversation", "c", "--from", "alice", "--to", "bob",
+            "--subject", "b", "--body", "yo", "--json",
+        ],
+    );
+    let limited = run_fail(
+        &bus,
+        &[
+            "send", "--conversation", "c", "--from", "alice", "--to", "bob",
+            "--subject", "c", "--body", "no", "--json",
+        ],
+    );
+    let err: serde_json::Value = serde_json::from_slice(&limited.stderr).unwrap();
+    assert_eq!(err["error"]["code"], "rate_limited");
+    assert_eq!(err["error"]["max_messages_per_sender"], 2);
+    assert_eq!(err["error"]["window_seconds"], 60);
+    assert_eq!(err["error"]["count"], 2);
+    let retry = err["error"]["retry_after_seconds"].as_i64().unwrap();
+    assert!(
+        (0..=60).contains(&retry),
+        "retry_after_seconds should fall within the window, got {retry}"
+    );
+}

@@ -391,8 +391,8 @@ the same warning to stderr, leaving the message id alone on stdout.
 | `not_participant` | agent or recipient is not a participant in the conversation |
 | `not_awaited`     | `ack --require-open` closed no open ask the agent is awaited on |
 | `conflict`        | a resource already exists: an agent name claimed by another holder, or a channel/conversation that already exists (create without `--if-missing`) |
-| `rate_limited`    | sender exceeded the conversation's message rate limit |
-| `too_large`       | message body exceeds the conversation's byte limit |
+| `rate_limited`    | sender exceeded the conversation's message rate limit; `error` carries `retry_after_seconds`, `window_seconds`, `max_messages_per_sender`, and `count` for backoff |
+| `too_large`       | message body exceeds the conversation's byte limit; `error` carries `size` and `limit` |
 | `timeout`         | a blocking command reached its deadline |
 | `io`              | underlying filesystem operation failed |
 | `parse`           | a stored JSON document could not be parsed |
