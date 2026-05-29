@@ -2301,3 +2301,43 @@ fn doctor_reports_stale_orphan_temp_files() {
         "doctor should warn about the stale orphan temp file"
     );
 }
+
+#[test]
+fn channel_list_reports_membership_and_unread() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(&bus, &["claim", "alice", "--workspace", "."]);
+    run(&bus, &["claim", "bob", "--workspace", "."]);
+    run(
+        &bus,
+        &["channel", "create", "eng", "--creator", "alice", "--members", "bob"],
+    );
+    run(&bus, &["channel", "create", "ops", "--creator", "alice"]);
+    run(
+        &bus,
+        &[
+            "send", "--channel", "eng", "--from", "alice", "--to", "*", "--subject",
+            "hi", "--body", "hello team",
+        ],
+    );
+
+    // Bare listing is an array covering every channel regardless of membership.
+    let listed = run(&bus, &["channel", "list", "--json"]);
+    let channels: serde_json::Value = serde_json::from_slice(&listed.stdout).unwrap();
+    let arr = channels.as_array().unwrap();
+    assert_eq!(arr.len(), 2);
+    let ops = arr.iter().find(|c| c["id"] == "ops").unwrap();
+    assert_eq!(ops["member_count"], 1);
+    assert!(ops.get("joined").is_none());
+
+    // With --agent, each channel is annotated with membership and unread.
+    let scoped = run(&bus, &["channel", "list", "--agent", "bob", "--json"]);
+    let scoped_channels: serde_json::Value = serde_json::from_slice(&scoped.stdout).unwrap();
+    let scoped_arr = scoped_channels.as_array().unwrap();
+    let eng = scoped_arr.iter().find(|c| c["id"] == "eng").unwrap();
+    assert_eq!(eng["joined"], true);
+    assert_eq!(eng["unread"], 1);
+    let ops = scoped_arr.iter().find(|c| c["id"] == "ops").unwrap();
+    assert_eq!(ops["joined"], false);
+    assert_eq!(ops["unread"], 0);
+}

@@ -11,6 +11,10 @@ shell out to `raft` can branch on results reliably.
 
 ### Added
 
+- `channel list`: enumerate the channels on the bus so an agent can discover
+  rooms to join instead of having to learn channel names out of band. Reports
+  each channel's members and message count; with `--agent`, annotates whether
+  that agent has joined and its unread count. Supports `--json` (bare array).
 - `me <agent>`: a one-shot orientation summary returning the agent's unread
   count, the open asks it owes and is owed, live peers, and the conversations
   it participates in (with per-conversation unread/message counts). Supports

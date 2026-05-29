@@ -88,6 +88,7 @@ fn command_wants_json(command: &Commands) -> bool {
         Commands::Channel { command } => match command {
             ChannelCommand::Create(args) => args.json,
             ChannelCommand::Join(args) => args.json,
+            ChannelCommand::List(args) => args.json,
         },
         Commands::Conversation { command } => match command {
             ConversationCommand::Create(args) => args.json,
@@ -126,6 +127,7 @@ fn run(root: PathBuf, command: Commands) -> Result<()> {
         Commands::Channel { command } => match command {
             ChannelCommand::Create(args) => cmd_channel_create(&root, args),
             ChannelCommand::Join(args) => cmd_channel_join(&root, args),
+            ChannelCommand::List(args) => cmd_channel_list(&root, args),
         },
         Commands::Conversation { command } => match command {
             ConversationCommand::Create(args) => cmd_conversation_create(&root, args),
@@ -667,6 +669,84 @@ fn cmd_channel_join(root: &Path, args: ChannelJoinArgs) -> Result<()> {
         }))?;
     } else {
         println!("@{agent_id} subscribed to channel {channel_id}");
+    }
+    Ok(())
+}
+
+fn cmd_channel_list(root: &Path, args: ChannelListArgs) -> Result<()> {
+    ensure_root(root)?;
+    let agent = match &args.agent {
+        Some(name) => Some(validate_id(name, "agent id")?),
+        None => None,
+    };
+    let mut channels = Vec::new();
+    for entry in sorted_read_dir(&root.join("conversations"))? {
+        let conv = entry.path();
+        if !conv.is_dir() {
+            continue;
+        }
+        let Some(meta): Option<Meta> = read_json(&conv.join("meta.json"))? else {
+            continue;
+        };
+        if !meta.channel {
+            continue;
+        }
+        let mut total = 0usize;
+        let mut unread = 0usize;
+        for message_entry in sorted_read_dir(&conv.join("messages"))? {
+            if message_entry.path().extension() != Some(OsStr::new("json")) {
+                continue;
+            }
+            let Some(message): Option<Message> = read_json(&message_entry.path())? else {
+                continue;
+            };
+            total += 1;
+            if let Some(agent) = &agent
+                && message_visible_to(&message, agent)
+                && message_is_unread(root, &message, agent)
+            {
+                unread += 1;
+            }
+        }
+        let mut record = serde_json::json!({
+            "id": meta.id,
+            "members": meta.participants,
+            "member_count": meta.participants.len(),
+            "messages": total,
+        });
+        if let Some(agent) = &agent {
+            let joined = meta.participants.iter().any(|item| item == agent);
+            record["joined"] = serde_json::json!(joined);
+            record["unread"] = serde_json::json!(if joined { unread } else { 0 });
+        }
+        channels.push(record);
+    }
+
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&channels)?);
+        return Ok(());
+    }
+    println!("channels ({} found):", channels.len());
+    if channels.is_empty() {
+        println!("  none");
+    }
+    for channel in &channels {
+        let id = channel["id"].as_str().unwrap_or("unknown");
+        let members = channel["member_count"].as_u64().unwrap_or(0);
+        let messages = channel["messages"].as_u64().unwrap_or(0);
+        if agent.is_some() {
+            let membership = if channel["joined"].as_bool().unwrap_or(false) {
+                "joined"
+            } else {
+                "not joined"
+            };
+            println!(
+                "  {id} [{membership}] {members} members, {messages} messages, {} unread",
+                channel["unread"].as_u64().unwrap_or(0)
+            );
+        } else {
+            println!("  {id} — {members} members, {messages} messages");
+        }
     }
     Ok(())
 }

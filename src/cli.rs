@@ -206,6 +206,18 @@ pub(crate) enum ChannelCommand {
     Create(ChannelCreateArgs),
     /// Subscribe an agent to an existing channel.
     Join(ChannelJoinArgs),
+    /// List channels on the bus so an agent can discover ones to join.
+    List(ChannelListArgs),
+}
+
+#[derive(Args)]
+pub(crate) struct ChannelListArgs {
+    /// Annotate each channel with this agent's membership and unread count.
+    #[arg(long)]
+    pub(crate) agent: Option<String>,
+    /// Emit machine-readable JSON instead of text.
+    #[arg(long)]
+    pub(crate) json: bool,
 }
 
 #[derive(Args)]

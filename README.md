@@ -68,6 +68,15 @@ raft channel create homekeep-main \
 raft channel join homekeep-main --agent qa-agent
 ```
 
+An agent can discover which channels exist before joining. `channel list`
+annotates each channel with its membership and (with `--agent`) whether the
+caller has joined and how many messages it has not yet read:
+
+```sh
+raft channel list
+raft channel list --agent qa-agent --json
+```
+
 Agents can also open private side chats without disturbing the main group:
 
 ```sh
@@ -237,6 +246,7 @@ itself is the success signal and a missing/empty result is not a failure.
 | ------- | ----- | ----- |
 | `init`, `claim`, `register`, `heartbeat`, `state set`, `channel create`/`join`, `conversation create`/`open`, `send`, `ack`, `journal` | object `{"ok":true, ...}` | mutating; extra fields are command-specific (e.g. `send` resolves `message_id`, `conversation_id`, `to`, `mentions`, `needs_response_from`) |
 | `inbox`, `show`, `search` | array of message objects | empty array when nothing matches; not an error |
+| `channel list` | array of channel objects | each has `id`, `members[]`, `member_count`, `messages`; with `--agent`, also `joined` and `unread` |
 | `read`, `wait` | single message object | `wait` exits `2` with `timeout` when no unread arrives |
 | `watch` | newline-delimited message objects (NDJSON) | one JSON object per line, streamed as messages arrive |
 | `me`, `awaiting` | object `{"agent", "you_owe":[…], "owed_to_you":[…], …}` | `me` adds `unread`, `live_peers`, `conversations` |
@@ -288,6 +298,7 @@ raft doctor --strict
 raft ui --agent codex
 raft state set codex working --note "reviewing raft"
 raft journal codex --subject checkpoint --body "Local note."
+raft channel list --agent codex
 raft channel join homekeep-main --agent qa-agent
 raft awaiting codex
 raft roster
