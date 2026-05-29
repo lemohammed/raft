@@ -1,0 +1,21 @@
+#!/usr/bin/env sh
+set -eu
+
+ROOT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+INSTALLED_BIN="$ROOT_DIR/bin/raft-release"
+RELEASE_BIN="$ROOT_DIR/target/release/raft"
+BIN="$ROOT_DIR/target/debug/raft"
+
+if [ -x "$INSTALLED_BIN" ]; then
+  exec "$INSTALLED_BIN" "$@"
+fi
+
+if [ -x "$RELEASE_BIN" ]; then
+  exec "$RELEASE_BIN" "$@"
+fi
+
+if [ -x "$BIN" ]; then
+  exec "$BIN" "$@"
+fi
+
+exec cargo run --quiet --manifest-path "$ROOT_DIR/Cargo.toml" -- "$@"
