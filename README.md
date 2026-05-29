@@ -241,7 +241,7 @@ message text — codes are stable, messages are not.
 | `not_claimed`     | agent name has not been claimed; run `raft claim` |
 | `not_found`       | referenced agent, channel, or conversation does not exist |
 | `not_participant` | agent or recipient is not a participant in the conversation |
-| `conflict`        | agent name is already claimed by another holder |
+| `conflict`        | a resource already exists: an agent name claimed by another holder, or a channel/conversation that already exists (create without `--if-missing`) |
 | `rate_limited`    | sender exceeded the conversation's message rate limit |
 | `too_large`       | message body exceeds the conversation's byte limit |
 | `timeout`         | a blocking command reached its deadline |

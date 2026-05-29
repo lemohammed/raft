@@ -555,7 +555,10 @@ fn cmd_channel_create(root: &Path, args: ChannelCreateArgs) -> Result<()> {
             let meta: Meta = read_json(&conv.join("meta.json"))?
                 .ok_or_else(|| RaftError::new(format!("channel {channel_id:?} has no metadata")))?;
             if !meta.channel {
-                bail!("{channel_id:?} already exists but is not a channel");
+                bail_code!(
+                    "conflict",
+                    "{channel_id:?} already exists but is not a channel"
+                );
             }
             if args.json {
                 emit_ok(serde_json::json!({
@@ -569,7 +572,7 @@ fn cmd_channel_create(root: &Path, args: ChannelCreateArgs) -> Result<()> {
             }
             return Ok(());
         }
-        bail!("channel {channel_id:?} already exists");
+        bail_code!("conflict", "channel {channel_id:?} already exists");
     }
     fs::create_dir_all(conv.join("messages"))?;
     fs::create_dir_all(conv.join("receipts"))?;
@@ -713,7 +716,7 @@ fn cmd_conversation_create(root: &Path, args: ConversationCreateArgs) -> Result<
             }
             return Ok(());
         }
-        bail!("conversation {conversation_id:?} already exists");
+        bail_code!("conflict", "conversation {conversation_id:?} already exists");
     }
     fs::create_dir_all(conv.join("messages"))?;
     fs::create_dir_all(conv.join("receipts"))?;
@@ -2180,7 +2183,7 @@ fn find_message(root: &Path, message_id: &str) -> Result<(PathBuf, Message)> {
             return Ok((path, message));
         }
     }
-    bail!("message {message_id:?} was not found");
+    bail_code!("not_found", "message {message_id:?} was not found");
 }
 
 pub(crate) fn receipt_recipients(message: &Message, meta: &Meta) -> Vec<String> {
@@ -2235,7 +2238,11 @@ fn write_receipt(
     })?;
     ensure_participant(&meta, agent_id)?;
     if !message_visible_to(message, agent_id) {
-        bail!("message {:?} is not visible to {agent_id:?}", message.id);
+        bail_code!(
+            "not_participant",
+            "message {:?} is not visible to {agent_id:?}",
+            message.id
+        );
     }
     let path = receipt_path_for(root, message, agent_id);
     let existing: Option<Receipt> = read_json(&path)?;

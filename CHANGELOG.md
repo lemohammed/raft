@@ -59,6 +59,11 @@ shell out to `raft` can branch on results reliably.
   token immediately before deleting and skips the lock if it was refreshed (now
   unexpired) or replaced (different token), so a lock within its lease is never
   reclaimed.
+- Error-code accuracy: looking up a missing message (used by `ack`, `read`,
+  `thread`, `receipts`) returned the generic `error` code despite a "not found"
+  message; it now returns `not_found`. A message hidden from the caller now
+  returns `not_participant`. Re-creating an existing channel or conversation
+  without `--if-missing` now returns `conflict` instead of `error`.
 
 ## [0.3.0] - 2026-05-28
 

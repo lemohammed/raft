@@ -333,6 +333,43 @@ fn me_rejects_unclaimed_agent() {
 }
 
 #[test]
+fn error_codes_are_stable_for_common_failures() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(&bus, &["claim", "alice", "--workspace", "."]);
+    run(&bus, &["claim", "bob", "--workspace", "."]);
+
+    // A missing message must surface not_found, not the generic error code —
+    // ack/read/thread/receipts all route through find_message.
+    let missing = run_fail(&bus, &["ack", "bob", "m-nope", "--status", "done", "--json"]);
+    let envelope: serde_json::Value = serde_json::from_slice(&missing.stderr).unwrap();
+    assert_eq!(envelope["error"]["code"], serde_json::json!("not_found"));
+
+    // Re-creating an existing channel/conversation without --if-missing is a conflict.
+    run(&bus, &["channel", "create", "team", "--creator", "alice", "--json"]);
+    let dup_channel = run_fail(&bus, &["channel", "create", "team", "--creator", "alice", "--json"]);
+    let dup_channel_json: serde_json::Value =
+        serde_json::from_slice(&dup_channel.stderr).unwrap();
+    assert_eq!(dup_channel_json["error"]["code"], serde_json::json!("conflict"));
+
+    run(
+        &bus,
+        &[
+            "conversation", "create", "proj", "--participants", "alice,bob", "--starter", "alice",
+        ],
+    );
+    let dup_conv = run_fail(
+        &bus,
+        &[
+            "conversation", "create", "proj", "--participants", "alice,bob", "--starter", "alice",
+            "--json",
+        ],
+    );
+    let dup_conv_json: serde_json::Value = serde_json::from_slice(&dup_conv.stderr).unwrap();
+    assert_eq!(dup_conv_json["error"]["code"], serde_json::json!("conflict"));
+}
+
+#[test]
 fn private_message_ack_flow() {
     let bus = temp_bus();
     run(&bus, &["init"]);
