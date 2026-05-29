@@ -1917,6 +1917,13 @@ fn cmd_inbox(root: &Path, args: InboxArgs) -> Result<()> {
     ensure_root(root)?;
     let rows = visible_messages(root, &agent_id, conversation_id.as_deref())?;
     let mut views = build_views(root, rows, &agent_id)?;
+    // `visible_messages` concatenates each conversation's messages in
+    // conversation-id order, so the merged list is sorted only *within* a room.
+    // Sort globally by message id (ids are time-ordered) before `--limit` keeps
+    // the tail, or `inbox --limit` would drop the newest messages overall and
+    // retain stale ones from a later-sorting room — `show`/`search`/`thread`
+    // all sort first for exactly this reason.
+    views.sort_by(|left, right| left.message.id.cmp(&right.message.id));
     if args.unread {
         views.retain(|view| view.unread);
     }

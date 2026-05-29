@@ -11,6 +11,14 @@ shell out to `raft` can branch on results reliably.
 
 ### Fixed
 
+- `inbox --limit` now keeps the globally newest messages. `visible_messages`
+  concatenates each conversation's messages in conversation-id order, so the
+  merged list was sorted only *within* a room; `inbox` then kept the trailing
+  `--limit` rows without a global sort, so it retained the newest messages of
+  the last-sorting room and silently truncated genuinely newer messages from
+  earlier-sorting rooms (and `--unread`/`--needs-action` inherited the same
+  skew). `inbox` now sorts by message id before applying the limit, matching
+  `show`, `search`, and `thread`.
 - `search --mentions <id>` now matches `*` broadcasts. The filter compared the
   target only against literal `mentions[]`/`to[]` entries, but a message sent to
   `*` reaches every room member (and `message_visible_to` treats it that way),

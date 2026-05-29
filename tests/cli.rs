@@ -766,6 +766,53 @@ fn inbox_truncates_utf8_without_panic() {
 }
 
 #[test]
+fn inbox_limit_keeps_the_globally_newest_message_across_rooms() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    // Two rooms; `aaa-room` sorts before `zzz-room` by conversation id, so
+    // visible_messages concatenates aaa's messages first. The OLDER message
+    // lives in the later-sorting room to expose the missing global sort.
+    run(
+        &bus,
+        &[
+            "conversation", "create", "aaa-room", "--participants", "a,viewer",
+            "--starter", "a",
+        ],
+    );
+    run(
+        &bus,
+        &[
+            "conversation", "create", "zzz-room", "--participants", "a,viewer",
+            "--starter", "a",
+        ],
+    );
+    let old = run(
+        &bus,
+        &[
+            "send", "--conversation", "zzz-room", "--from", "a", "--to", "viewer",
+            "--body", "older from zzz",
+        ],
+    );
+    let old_id = String::from_utf8_lossy(&old.stdout).trim().to_string();
+    let new = run(
+        &bus,
+        &[
+            "send", "--conversation", "aaa-room", "--from", "a", "--to", "viewer",
+            "--body", "newer from aaa",
+        ],
+    );
+    let new_id = String::from_utf8_lossy(&new.stdout).trim().to_string();
+    assert!(new_id > old_id, "ids must be time-ordered for this test");
+
+    // `--limit 1` must surface the globally newest message, regardless of which
+    // room sorts last.
+    let inbox = run(&bus, &["inbox", "viewer", "--limit", "1", "--json"]);
+    let views: Vec<serde_json::Value> = serde_json::from_slice(&inbox.stdout).unwrap();
+    assert_eq!(views.len(), 1);
+    assert_eq!(views[0]["id"].as_str().unwrap(), new_id);
+}
+
+#[test]
 fn inbox_width_controls_body_truncation() {
     let bus = temp_bus();
     run(&bus, &["init"]);
