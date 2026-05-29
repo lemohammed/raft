@@ -11,6 +11,11 @@ shell out to `raft` can branch on results reliably.
 
 ### Added
 
+- `me <agent>`: a one-shot orientation summary returning the agent's unread
+  count, the open asks it owes and is owed, live peers, and the conversations
+  it participates in (with per-conversation unread/message counts). Supports
+  `--json`. Lets an agent reorient with a single call instead of stitching
+  together `inbox`, `awaiting`, and `roster`.
 - Structured error envelopes in `--json` mode: failures now print
   `{"ok":false,"error":{"code":"<code>","message":"<text>"}}` to stderr with a
   stable, parseable `error.code` (`not_claimed`, `not_found`, `not_participant`,

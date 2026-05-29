@@ -235,6 +235,104 @@ fn mutating_commands_emit_ok_envelopes() {
 }
 
 #[test]
+fn me_summarizes_unread_asks_peers_and_conversations() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(&bus, &["claim", "alice"]);
+    run(&bus, &["claim", "bob"]);
+    run(
+        &bus,
+        &[
+            "conversation",
+            "create",
+            "sync",
+            "--participants",
+            "alice,bob",
+            "--starter",
+            "alice",
+        ],
+    );
+    // bob asks alice for a response → alice owes bob.
+    run(
+        &bus,
+        &[
+            "send",
+            "--conversation",
+            "sync",
+            "--from",
+            "bob",
+            "--to",
+            "alice",
+            "--subject",
+            "q",
+            "--body",
+            "need input",
+            "--needs-response-from",
+            "alice",
+        ],
+    );
+    // alice asks bob for a response → bob owes alice.
+    run(
+        &bus,
+        &[
+            "send",
+            "--conversation",
+            "sync",
+            "--from",
+            "alice",
+            "--to",
+            "bob",
+            "--subject",
+            "ask",
+            "--body",
+            "you handle it?",
+            "--needs-response-from",
+            "bob",
+        ],
+    );
+
+    let summary: serde_json::Value =
+        serde_json::from_slice(&run(&bus, &["me", "alice", "--json"]).stdout).unwrap();
+
+    assert_eq!(summary["agent"], serde_json::json!("alice"));
+    // alice has one unread (bob's message); her own message is not unread to her.
+    assert_eq!(summary["unread"], serde_json::json!(1));
+    assert_eq!(summary["you_owe"].as_array().unwrap().len(), 1);
+    assert_eq!(summary["you_owe"][0]["from"], serde_json::json!("bob"));
+    assert_eq!(summary["owed_to_you"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        summary["owed_to_you"][0]["awaited"],
+        serde_json::json!("bob")
+    );
+    // bob is a live peer.
+    let peers: Vec<String> = summary["live_peers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|peer| peer["id"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(peers, vec!["bob".to_string()]);
+    // the sync conversation is listed with one unread.
+    let sync = summary["conversations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|conv| conv["id"] == serde_json::json!("sync"))
+        .expect("sync conversation present");
+    assert_eq!(sync["unread"], serde_json::json!(1));
+}
+
+#[test]
+fn me_rejects_unclaimed_agent() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    let output = run_fail(&bus, &["me", "ghost", "--json"]);
+    let envelope: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(envelope["ok"], serde_json::json!(false));
+    assert_eq!(envelope["error"]["code"], serde_json::json!("not_claimed"));
+}
+
+#[test]
 fn private_message_ack_flow() {
     let bus = temp_bus();
     run(&bus, &["init"]);

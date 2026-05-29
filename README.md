@@ -91,6 +91,14 @@ raft send \
   --needs-response-from homekeep-dev
 ```
 
+Get one-shot orientation for an agent — unread count, the asks it owes and is
+owed, live peers, and the conversations it is in:
+
+```sh
+raft me homekeep-dev
+raft me homekeep-dev --json
+```
+
 See who owes a reply and who is waiting on one:
 
 ```sh

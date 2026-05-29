@@ -94,6 +94,7 @@ fn command_wants_json(command: &Commands) -> bool {
             ConversationCommand::Open(args) => args.json,
         },
         Commands::Send(args) => args.json,
+        Commands::Me(args) => args.json,
         Commands::Awaiting(args) => args.json,
         Commands::Roster(args) => args.json,
         Commands::Inbox(args) => args.json,
@@ -131,6 +132,7 @@ fn run(root: PathBuf, command: Commands) -> Result<()> {
             ConversationCommand::Open(args) => cmd_conversation_open(&root, args),
         },
         Commands::Send(args) => cmd_send(&root, args),
+        Commands::Me(args) => cmd_me(&root, args),
         Commands::Awaiting(args) => cmd_awaiting(&root, args),
         Commands::Roster(args) => cmd_roster(&root, args),
         Commands::Inbox(args) => cmd_inbox(&root, args),
@@ -1021,6 +1023,165 @@ fn cmd_awaiting(root: &Path, args: AwaitingArgs) -> Result<()> {
         println!(
             "  {} in {} -> @{} [{}]: {}",
             ask.message_id, ask.conversation_id, ask.awaited, ask.status, ask.subject
+        );
+    }
+    Ok(())
+}
+
+fn cmd_me(root: &Path, args: MeArgs) -> Result<()> {
+    ensure_root(root)?;
+    let agent = validate_id(&args.agent, "agent id")?;
+    if !agent_path(root, &agent).exists() {
+        bail_code!(
+            "not_claimed",
+            "agent @{agent} is not claimed; use raft claim"
+        );
+    }
+
+    // Unread totals and per-conversation counts, from a single visibility scan.
+    let messages = visible_messages(root, &agent, None)?;
+    let mut unread = 0usize;
+    let mut per_conversation: BTreeMap<String, (usize, usize)> = BTreeMap::new();
+    for message in &messages {
+        let counts = per_conversation
+            .entry(message.conversation_id.clone())
+            .or_default();
+        counts.0 += 1;
+        if message_is_unread(root, message, &agent) {
+            counts.1 += 1;
+            unread += 1;
+        }
+    }
+
+    // Open asks split into the two directions, reusing the awaiting logic.
+    let asks = gather_open_asks(root, None, Some(&agent))?;
+    let you_owe: Vec<&OpenAsk> = asks.iter().filter(|ask| ask.awaited == agent).collect();
+    let owed_to_you: Vec<&OpenAsk> = asks
+        .iter()
+        .filter(|ask| ask.from == agent && ask.awaited != agent)
+        .collect();
+
+    // Live peers (other agents whose heartbeat has not expired).
+    let now = Utc::now();
+    let mut live_peers = Vec::new();
+    for entry in sorted_read_dir(&root.join("agents"))? {
+        if entry.path().extension() != Some(OsStr::new("json")) {
+            continue;
+        }
+        let Some(peer): Option<Agent> = read_json(&entry.path())? else {
+            continue;
+        };
+        if peer.id == agent {
+            continue;
+        }
+        let live = parse_time(&peer.expires_at)
+            .map(|expires_at| expires_at >= now)
+            .unwrap_or(false);
+        if !live {
+            continue;
+        }
+        live_peers.push(serde_json::json!({
+            "id": peer.id,
+            "current_state": peer.current_state,
+            "state_note": peer.state_note,
+        }));
+    }
+
+    // Conversations the agent participates in, annotated with unread/message counts.
+    let mut conversations = Vec::new();
+    for entry in sorted_read_dir(&root.join("conversations"))? {
+        let conv = entry.path();
+        if !conv.is_dir() {
+            continue;
+        }
+        let Some(meta): Option<Meta> = read_json(&conv.join("meta.json"))? else {
+            continue;
+        };
+        if !meta.participants.iter().any(|item| item == &agent) {
+            continue;
+        }
+        let (total, unread_here) = per_conversation.get(&meta.id).copied().unwrap_or((0, 0));
+        conversations.push(serde_json::json!({
+            "id": meta.id,
+            "channel": meta.channel,
+            "private": meta.private,
+            "messages": total,
+            "unread": unread_here,
+        }));
+    }
+
+    if args.json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "agent": agent,
+                "unread": unread,
+                "you_owe": you_owe,
+                "owed_to_you": owed_to_you,
+                "live_peers": live_peers,
+                "conversations": conversations,
+            }))?
+        );
+        return Ok(());
+    }
+
+    println!("@{agent} — {unread} unread");
+    println!("you owe ({}):", you_owe.len());
+    if you_owe.is_empty() {
+        println!("  nothing");
+    }
+    for ask in &you_owe {
+        println!(
+            "  {} in {} from @{} [{}]: {}",
+            ask.message_id, ask.conversation_id, ask.from, ask.status, ask.subject
+        );
+    }
+    println!("owed to you ({}):", owed_to_you.len());
+    if owed_to_you.is_empty() {
+        println!("  nothing");
+    }
+    for ask in &owed_to_you {
+        println!(
+            "  {} in {} -> @{} [{}]: {}",
+            ask.message_id, ask.conversation_id, ask.awaited, ask.status, ask.subject
+        );
+    }
+    println!("live peers ({}):", live_peers.len());
+    if live_peers.is_empty() {
+        println!("  none");
+    }
+    for peer in &live_peers {
+        let note = peer["state_note"].as_str().unwrap_or("");
+        let note_suffix = if note.is_empty() {
+            String::new()
+        } else {
+            format!(" — {note}")
+        };
+        println!(
+            "  @{} [{}]{}",
+            peer["id"].as_str().unwrap_or("unknown"),
+            peer["current_state"].as_str().unwrap_or("idle"),
+            note_suffix
+        );
+    }
+    println!("conversations ({}):", conversations.len());
+    if conversations.is_empty() {
+        println!("  none");
+    }
+    for conv in &conversations {
+        let kind = if conv["channel"].as_bool().unwrap_or(false) {
+            "channel"
+        } else if conv["private"].as_bool().unwrap_or(false) {
+            "private"
+        } else {
+            "group"
+        };
+        println!(
+            "  {} [{}] {} unread / {} total",
+            conv["id"].as_str().unwrap_or("unknown"),
+            kind,
+            conv["unread"].as_u64().unwrap_or(0),
+            conv["messages"].as_u64().unwrap_or(0)
         );
     }
     Ok(())

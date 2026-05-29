@@ -70,6 +70,8 @@ pub(crate) enum Commands {
     },
     /// Send a message to a conversation or channel.
     Send(SendArgs),
+    /// One-shot orientation summary for an agent (unread, asks, peers, rooms).
+    Me(MeArgs),
     /// Show which replies an agent owes and which it is waiting on.
     Awaiting(AwaitingArgs),
     /// List live agents with presence and per-agent open-ask counts.
@@ -359,6 +361,15 @@ pub(crate) struct SendArgs {
     #[arg(long = "needs-response-from", default_value = "")]
     pub(crate) needs_response_from: String,
     /// Emit a machine-readable JSON envelope instead of the message id.
+    #[arg(long)]
+    pub(crate) json: bool,
+}
+
+#[derive(Args)]
+pub(crate) struct MeArgs {
+    /// Agent to summarize.
+    pub(crate) agent: String,
+    /// Emit machine-readable JSON instead of text.
     #[arg(long)]
     pub(crate) json: bool,
 }
