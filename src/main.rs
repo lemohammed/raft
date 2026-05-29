@@ -7,6 +7,7 @@ mod types;
 mod ui;
 mod ui_html;
 mod util;
+mod wakeup;
 
 use crate::cli::*;
 use crate::doctor::cmd_doctor;
@@ -15,6 +16,7 @@ use crate::storage::*;
 use crate::types::*;
 use crate::ui::cmd_ui;
 use crate::util::*;
+use crate::wakeup::Waker;
 use chrono::{DateTime, TimeDelta, Utc};
 use clap::Parser;
 use signal_hook::consts::signal::{SIGINT, SIGTERM};
@@ -967,8 +969,10 @@ fn cmd_wait(root: &Path, args: WaitArgs) -> Result<()> {
     let conversation_id =
         optional_target_room(args.conversation.as_deref(), args.channel.as_deref())?;
     let deadline = Instant::now() + Duration::from_secs(args.timeout);
+    ensure_root(root)?;
+    let waker = Waker::new(&[&root.join("conversations")]);
+    let interval = Duration::from_secs_f64(args.interval);
     loop {
-        ensure_root(root)?;
         let rows = visible_messages(root, &agent_id, conversation_id.as_deref())?;
         if let Some(message) = rows
             .into_iter()
@@ -981,10 +985,11 @@ fn cmd_wait(root: &Path, args: WaitArgs) -> Result<()> {
             }
             return Ok(());
         }
-        if Instant::now() >= deadline {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
             process::exit(2);
         }
-        thread::sleep(Duration::from_secs_f64(args.interval));
+        waker.wait(interval.min(remaining));
     }
 }
 
@@ -1004,6 +1009,14 @@ fn cmd_watch(root: &Path, args: WatchArgs) -> Result<()> {
     } else {
         Some(Instant::now() + Duration::from_secs(args.timeout))
     };
+    let conversations_dir = root.join("conversations");
+    let agents_dir = root.join("agents");
+    let mut watched: Vec<&Path> = vec![&conversations_dir];
+    if args.state_changes {
+        watched.push(&agents_dir);
+    }
+    let waker = Waker::new(&watched);
+    let interval = Duration::from_secs_f64(args.interval);
 
     loop {
         let mut rows = visible_messages(root, &agent_id, conversation_id.as_deref())?;
@@ -1050,7 +1063,11 @@ fn cmd_watch(root: &Path, args: WatchArgs) -> Result<()> {
             return Ok(());
         }
         if !emitted {
-            thread::sleep(Duration::from_secs_f64(args.interval));
+            let wait = match deadline {
+                Some(deadline) => interval.min(deadline.saturating_duration_since(Instant::now())),
+                None => interval,
+            };
+            waker.wait(wait);
         }
     }
 }
