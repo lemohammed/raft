@@ -2705,3 +2705,63 @@ fn not_participant_error_lists_the_valid_participants() {
     assert_eq!(nf_json["error"]["code"], "not_found");
     assert!(nf_json["error"]["participants"].is_null());
 }
+
+#[test]
+fn not_found_suggests_nearest_conversation_id() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(&bus, &["claim", "alice", "--workspace", "."]);
+    run(&bus, &["claim", "bob", "--workspace", "."]);
+    run(
+        &bus,
+        &[
+            "conversation", "create", "homekeep-sync", "--participants", "alice,bob",
+            "--starter", "alice",
+        ],
+    );
+    run(&bus, &["channel", "create", "homekeep-main", "--creator", "alice"]);
+
+    // A near-miss conversation id on send yields a "did you mean" suggestion.
+    let typo = run_fail(
+        &bus,
+        &[
+            "send", "--conversation", "homekep-sync", "--from", "alice", "--to", "bob",
+            "--subject", "x", "--body", "y", "--json",
+        ],
+    );
+    let typo_json: serde_json::Value = serde_json::from_slice(&typo.stderr).unwrap();
+    assert_eq!(typo_json["error"]["code"], "not_found");
+    let suggestions: Vec<&str> = typo_json["error"]["suggestions"]
+        .as_array()
+        .expect("not_found should suggest near-matches")
+        .iter()
+        .map(|s| s.as_str().unwrap())
+        .collect();
+    assert!(suggestions.contains(&"homekeep-sync"));
+
+    // The closest match is ranked first.
+    assert_eq!(suggestions[0], "homekeep-sync");
+
+    // channel join enriches the same way, naming the channel.
+    let chan = run_fail(&bus, &["channel", "join", "homekeep-man", "--agent", "bob", "--json"]);
+    let chan_json: serde_json::Value = serde_json::from_slice(&chan.stderr).unwrap();
+    let chan_suggestions: Vec<&str> = chan_json["error"]["suggestions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s.as_str().unwrap())
+        .collect();
+    assert_eq!(chan_suggestions[0], "homekeep-main");
+
+    // A wildly different id offers no suggestions rather than noise.
+    let far = run_fail(
+        &bus,
+        &[
+            "send", "--conversation", "zzzzzzzzzz", "--from", "alice", "--to", "bob",
+            "--subject", "x", "--body", "y", "--json",
+        ],
+    );
+    let far_json: serde_json::Value = serde_json::from_slice(&far.stderr).unwrap();
+    assert_eq!(far_json["error"]["code"], "not_found");
+    assert!(far_json["error"]["suggestions"].is_null());
+}

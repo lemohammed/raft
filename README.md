@@ -277,6 +277,15 @@ reveals who can be addressed (and who to `conversation add`):
 {"ok":false,"error":{"code":"not_participant","message":"recipient \"qa\" is not a participant in \"proj\"","participants":["codex","homekeep-dev"]}}
 ```
 
+A `not_found` failure on a mistyped conversation or channel id includes
+nearest-match `suggestions` (closest first; omitted when nothing is close), so
+a typo'd `send`, `channel join`, or `conversation add` hints at the right id
+without a `channel list` / `me` round-trip:
+
+```json
+{"ok":false,"error":{"code":"not_found","message":"channel \"homekeep-man\" does not exist","suggestions":["homekeep-main"]}}
+```
+
 **Success output shapes (`--json`)**
 
 Two families of success output. *Mutating* commands wrap their result in an

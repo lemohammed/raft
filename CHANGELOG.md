@@ -11,6 +11,12 @@ shell out to `raft` can branch on results reliably.
 
 ### Added
 
+- `not_found` errors for a mistyped conversation or channel id now carry
+  nearest-match `suggestions` (by edit distance, closest first, capped at three
+  and omitted when nothing is close), so a typo'd `send`, `channel join`, or
+  `conversation add` hints at the intended id without a `channel list`/`me`
+  round-trip. Read commands that treat an empty result as success (`show`,
+  `search`) are unchanged.
 - `not_participant` error envelopes now carry the conversation's valid
   `participants` alongside `code`/`message`, so a rejected `send`/`reply` tells
   the agent who *can* be addressed (and who to `conversation add`) without a

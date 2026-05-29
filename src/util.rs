@@ -70,6 +70,46 @@ pub(crate) fn validate_id(value: &str, label: &str) -> Result<String> {
     Ok(value.to_string())
 }
 
+/// Levenshtein edit distance between two strings, counted in `char`s so
+/// multi-byte ids compare sensibly.
+fn edit_distance(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    let mut curr = vec![0usize; b.len() + 1];
+    for (i, ca) in a.iter().enumerate() {
+        curr[0] = i + 1;
+        for (j, cb) in b.iter().enumerate() {
+            let cost = usize::from(ca != cb);
+            curr[j + 1] = (prev[j + 1] + 1).min(curr[j] + 1).min(prev[j] + cost);
+        }
+        std::mem::swap(&mut prev, &mut curr);
+    }
+    prev[b.len()]
+}
+
+/// Suggest the `candidates` closest to `target`, closest first, for "did you
+/// mean" recovery on a mistyped id. Only reasonably-close matches are returned
+/// (edit distance within a third of the longer length, minimum 1), so unrelated
+/// ids are never offered; an exact match is excluded.
+pub(crate) fn nearest_ids(target: &str, candidates: &[String], limit: usize) -> Vec<String> {
+    let mut scored: Vec<(usize, &String)> = candidates
+        .iter()
+        .filter(|candidate| candidate.as_str() != target)
+        .filter_map(|candidate| {
+            let distance = edit_distance(target, candidate);
+            let threshold = (target.chars().count().max(candidate.chars().count()) / 3).max(1);
+            (distance <= threshold).then_some((distance, candidate))
+        })
+        .collect();
+    scored.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(right.1)));
+    scored
+        .into_iter()
+        .take(limit)
+        .map(|(_, candidate)| candidate.clone())
+        .collect()
+}
+
 pub(crate) fn validate_claim_name(value: &str) -> Result<String> {
     let agent_id = validate_id(value.trim_start_matches('@'), "agent name")?;
     if agent_id.len() < 3 {

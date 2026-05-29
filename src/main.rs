@@ -648,9 +648,7 @@ fn cmd_channel_join(root: &Path, args: ChannelJoinArgs) -> Result<()> {
     )?;
     let conv = conversation_path(root, &channel_id)?;
     let mut meta: Meta = read_json(&conv.join("meta.json"))?
-        .ok_or_else(|| {
-            RaftError::coded("not_found", format!("channel {channel_id:?} does not exist"))
-        })?;
+        .ok_or_else(|| conversation_not_found(root, &channel_id, "channel"))?;
     if !meta.channel {
         bail!("{channel_id:?} is not a channel");
     }
@@ -902,12 +900,8 @@ fn cmd_conversation_add(root: &Path, args: ConversationAddArgs) -> Result<()> {
         LOCK_TIMEOUT_SECONDS,
     )?;
     let conv = conversation_path(root, &conversation_id)?;
-    let mut meta: Meta = read_json(&conv.join("meta.json"))?.ok_or_else(|| {
-        RaftError::coded(
-            "not_found",
-            format!("conversation {conversation_id:?} does not exist"),
-        )
-    })?;
+    let mut meta: Meta = read_json(&conv.join("meta.json"))?
+        .ok_or_else(|| conversation_not_found(root, &conversation_id, "conversation"))?;
     if meta.channel {
         bail!("{conversation_id:?} is a channel; use `raft channel join` instead");
     }
@@ -2135,15 +2129,43 @@ fn cmd_serve(root: &Path, args: ServeArgs) -> Result<()> {
 }
 
 
+/// Ids of every conversation/channel on the bus (those with a `meta.json`).
+fn conversation_ids(root: &Path) -> Vec<String> {
+    let Ok(entries) = sorted_read_dir(&root.join("conversations")) else {
+        return Vec::new();
+    };
+    entries
+        .into_iter()
+        .filter_map(|entry| {
+            let path = entry.path();
+            if path.is_dir() && path.join("meta.json").exists() {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .map(str::to_string)
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// A `not_found` error for a missing conversation/channel, enriched with
+/// nearest-match `suggestions` so an agent can recover from a typo'd id in one
+/// shot instead of falling back to `channel list` / `me`.
+fn conversation_not_found(root: &Path, id: &str, noun: &str) -> RaftError {
+    let err = RaftError::coded("not_found", format!("{noun} {id:?} does not exist"));
+    let suggestions = nearest_ids(id, &conversation_ids(root), 3);
+    if suggestions.is_empty() {
+        err
+    } else {
+        err.with_details(serde_json::json!({ "suggestions": suggestions }))
+    }
+}
+
 fn load_conversation(root: &Path, conversation_id: &str) -> Result<(PathBuf, Meta)> {
     let conv = conversation_path(root, conversation_id)?;
     let meta: Meta = read_json(&conv.join("meta.json"))?
-        .ok_or_else(|| {
-            RaftError::coded(
-                "not_found",
-                format!("conversation {conversation_id:?} does not exist"),
-            )
-        })?;
+        .ok_or_else(|| conversation_not_found(root, conversation_id, "conversation"))?;
     Ok((conv, meta))
 }
 
