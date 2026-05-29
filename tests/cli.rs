@@ -3714,3 +3714,59 @@ fn wait_fails_fast_for_an_unclaimed_agent() {
     let owed_err: serde_json::Value = serde_json::from_slice(&owed.stderr).unwrap();
     assert_eq!(owed_err["error"]["code"], "not_claimed");
 }
+
+#[test]
+fn bare_reply_reports_thread_participants_it_did_not_reach() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(&bus, &["claim", "alice", "--workspace", "."]);
+    run(&bus, &["claim", "bob", "--workspace", "."]);
+    run(&bus, &["claim", "carol", "--workspace", "."]);
+    run(
+        &bus,
+        &[
+            "conversation", "create", "trio", "--participants", "alice,bob,carol", "--starter",
+            "alice",
+        ],
+    );
+
+    // Alice opens a thread addressed to the whole group.
+    let sent = run(
+        &bus,
+        &[
+            "send", "--conversation", "trio", "--from", "alice", "--to", "bob,carol", "--subject",
+            "plan", "--body", "thoughts?", "--json",
+        ],
+    );
+    let sent_json: serde_json::Value = serde_json::from_slice(&sent.stdout).unwrap();
+    let parent_id = sent_json["message_id"].as_str().unwrap();
+
+    // A bare reply from bob defaults its audience to the parent's sender (alice),
+    // silently dropping carol. The envelope names carol so bob can re-address.
+    let reply = run(
+        &bus,
+        &["reply", parent_id, "--from", "bob", "--body", "ack", "--json"],
+    );
+    let reply_json: serde_json::Value = serde_json::from_slice(&reply.stdout).unwrap();
+    assert_eq!(reply_json["to"], serde_json::json!(["alice"]));
+    let omitted = reply_json["omitted_recipients"].as_array().unwrap();
+    assert_eq!(
+        omitted,
+        &vec![serde_json::json!("carol")],
+        "bare reply should flag the dropped group participant"
+    );
+
+    // An explicit --to that covers the thread is a deliberate choice: no warning.
+    let full = run(
+        &bus,
+        &[
+            "reply", parent_id, "--from", "bob", "--to", "alice,carol", "--body", "ack all",
+            "--json",
+        ],
+    );
+    let full_json: serde_json::Value = serde_json::from_slice(&full.stdout).unwrap();
+    assert!(
+        full_json["omitted_recipients"].as_array().unwrap().is_empty(),
+        "explicit --to covering the thread should omit nobody"
+    );
+}

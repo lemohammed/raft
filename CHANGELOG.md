@@ -11,6 +11,12 @@ shell out to `raft` can branch on results reliably.
 
 ### Added
 
+- `reply` now reports `omitted_recipients[]`: the group/channel participants who
+  were on the parent thread but are not reached by a bare reply (which defaults
+  its audience to the parent's sender alone). Previously a reply in a multi-party
+  thread silently answered only one person; the field — and a stderr warning in
+  text mode — surfaces who was dropped so the sender can re-address with `--to`.
+  Stays empty when `--to` is given explicitly, since that is a deliberate choice.
 - `wait` (both the unread form and `--owed`/`--resolved`) now fails fast with
   `not_claimed` — carrying the same nearest-id `suggestions` — when the named
   agent has not been claimed, instead of blocking for the full `--timeout` and

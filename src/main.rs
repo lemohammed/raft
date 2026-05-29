@@ -1079,6 +1079,11 @@ fn cmd_reply(root: &Path, args: ReplyArgs) -> Result<()> {
         .as_deref()
         .map(validate_ack_status)
         .transpose()?;
+    // A bare reply (no --to) answers only the parent's sender. In a group or
+    // channel thread that silently drops everyone else who was on the parent, so
+    // we surface the omitted participants below — but only when the audience was
+    // defaulted, since an explicit --to is a deliberate choice we don't second-guess.
+    let explicit_to = args.to.is_some();
     let to = args.to.unwrap_or_else(|| parent.from.clone());
     let subject = args.subject.unwrap_or_else(|| parent.subject.clone());
     // Hold the conversation lock across both the reply send and the optional
@@ -1110,6 +1115,11 @@ fn cmd_reply(root: &Path, args: ReplyArgs) -> Result<()> {
         write_receipt(root, &sender, &parent, status, args.ack_note)?;
     }
     let offline = offline_recipients(root, &message)?;
+    let omitted = if explicit_to {
+        Vec::new()
+    } else {
+        omitted_thread_participants(root, &parent, &message)?
+    };
     if json {
         println!(
             "{}",
@@ -1123,13 +1133,46 @@ fn cmd_reply(root: &Path, args: ReplyArgs) -> Result<()> {
                 "after": message.after,
                 "ack": ack_status,
                 "offline_recipients": offline,
+                "omitted_recipients": omitted,
             }))?
         );
     } else {
         println!("{}", message.id);
         warn_offline_recipients(&offline);
+        warn_omitted_recipients(&omitted);
     }
     Ok(())
+}
+
+/// Conversation participants who were in the loop on the parent message but are
+/// NOT reached by this reply. A bare `reply` defaults its audience to the
+/// parent's sender, so in a group or channel thread the parent's other
+/// recipients silently fall out; this names them so the agent can re-address
+/// with `--to` if it meant to answer the whole thread. Both `*` audiences expand
+/// to the conversation's participants before the diff.
+fn omitted_thread_participants(root: &Path, parent: &Message, reply: &Message) -> Result<Vec<String>> {
+    let (_, meta) = load_conversation(root, &parent.conversation_id)?;
+    let expand = |recipients: &[String]| -> BTreeSet<String> {
+        let mut set = BTreeSet::new();
+        for recipient in recipients {
+            if recipient == "*" {
+                set.extend(meta.participants.iter().cloned());
+            } else {
+                set.insert(recipient.clone());
+            }
+        }
+        set
+    };
+    // The parent's audience is everyone it was addressed to, plus its sender.
+    let mut parent_audience = expand(&parent.to);
+    parent_audience.insert(parent.from.clone());
+    let reached = expand(&reply.to);
+    Ok(parent_audience
+        .into_iter()
+        .filter(|id| {
+            id != &reply.from && id != "*" && !reached.contains(id) && meta.participants.contains(id)
+        })
+        .collect())
 }
 
 /// Text-mode courtesy: warn on stderr (so it never pollutes the stdout id) when
@@ -1144,6 +1187,23 @@ fn warn_offline_recipients(offline: &[String]) {
         .collect::<Vec<_>>()
         .join(", ");
     eprintln!("warning: offline recipient(s): {names}");
+}
+
+/// Text-mode courtesy: warn on stderr when a bare `reply` reached fewer agents
+/// than the parent thread, so the sender notices it answered only part of a
+/// group/channel conversation and can re-address with `--to`.
+fn warn_omitted_recipients(omitted: &[String]) {
+    if omitted.is_empty() {
+        return;
+    }
+    let names = omitted
+        .iter()
+        .map(|id| format!("@{id}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    eprintln!(
+        "warning: reply did not reach other thread participant(s): {names}; pass --to to include them"
+    );
 }
 
 /// Retract an open ask the sender no longer needs answered. Marks the message
