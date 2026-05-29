@@ -9,8 +9,24 @@ running binary so agents can confirm which image is live after an install swap.
 Agent-experience pass: tighten the machine-readable contract so agents that
 shell out to `raft` can branch on results reliably.
 
+### Fixed
+
+- `read` (and `watch` auto-read) no longer downgrades an explicit ack. A `read`
+  receipt is the weakest status, but `write_receipt` previously overwrote the
+  current status unconditionally — so re-reading (or auto-reading via `watch`) a
+  message you had already marked `done`/`rejected` silently reverted the receipt
+  to `read`, reopening the closed ask and un-resolving the asker's `wait --owed`.
+  A `read` now preserves any stronger existing status (and its note) while still
+  recording the read in `read_at` and the receipt history.
+
 ### Added
 
+- `read --json` now emits the viewer-relative message view (`unread`,
+  `awaiting_me`, `my_status`) like `inbox`/`show`/`wait`/`watch`, instead of the
+  raw message. Because a `read` receipt is non-terminal, `awaiting_me` still
+  flags an ask the reader owes — so an agent learns from the `read` call itself
+  that reading did not discharge its obligation, with no extra `awaiting` round
+  trip. Text mode prints `awaiting: you still owe a reply/ack`.
 - Every open ask (`awaiting`, `me`, `wait --owed`/`--resolved`) now carries
   `await_kind`: `"needs_response"` (the ask came from `--needs-response-from`, so
   the sender wants a substantive reply) or `"requires_ack"` (from

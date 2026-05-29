@@ -405,7 +405,7 @@ itself is the success signal and a missing/empty result is not a failure.
 | `inbox`, `show` | array of viewer-relative message objects | each message plus `unread`, `awaiting_me`, `my_status` (see below); empty array when nothing matches, not an error |
 | `search` | array of message objects | empty array when nothing matches; not an error |
 | `channel list` | array of channel objects | each has `id`, `members[]`, `member_count`, `messages`; with `--agent`, also `joined` and `unread` |
-| `read` | single message object | the raw message shape |
+| `read` | single viewer-relative message object | message plus `unread`/`awaiting_me`/`my_status` (see below); recording the `read` receipt does not satisfy an ask, so `awaiting_me` still flags one you owe |
 | `wait` | single viewer-relative message object | message plus `unread`/`awaiting_me`/`my_status`; exits `2` with `timeout` when no unread arrives. With `--owed`/`--resolved`, emits `{"ok":true,"resolved":{…}|null}` (the closed ask) instead |
 | `watch` | newline-delimited viewer-relative message objects (NDJSON) | one JSON object per line (message plus `unread`/`awaiting_me`/`my_status`), streamed as messages arrive |
 | `me`, `awaiting` | object `{"agent", "you_owe":[…], "owed_to_you":[…], …}` | `me` adds `unread`, `live_peers`, `conversations` |
@@ -418,7 +418,7 @@ A message object carries `id`, `conversation_id`, `kind`, `from`, `to[]`,
 `needs_response_from[]`, `subject_id`, and `after` (the parent message id, or
 `null` for a root).
 
-`inbox`/`show`/`wait`/`watch` decorate each message with three fields relative
+`inbox`/`show`/`read`/`wait`/`watch` decorate each message with three fields relative
 to the `--agent` reading it, so you can triage in one call without a follow-up
 `awaiting`/`receipts` per message: `unread` (no read receipt yet),
 `awaiting_me` (you are in the message's still-open awaited set — it requested an

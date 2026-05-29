@@ -3818,3 +3818,47 @@ fn open_asks_label_whether_a_reply_or_a_bare_ack_is_expected() {
     assert_eq!(kinds["deploy"], "requires_ack");
     assert_eq!(kinds["design"], "needs_response");
 }
+
+#[test]
+fn read_reports_that_an_ask_is_still_owed_after_reading() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(&bus, &["claim", "alice", "--workspace", "."]);
+    run(&bus, &["claim", "bob", "--workspace", "."]);
+    run(
+        &bus,
+        &[
+            "conversation", "create", "room", "--participants", "alice,bob", "--starter", "alice",
+        ],
+    );
+    let sent = run(
+        &bus,
+        &[
+            "send", "--conversation", "room", "--from", "alice", "--to", "bob", "--subject",
+            "deploy", "--body", "ship it", "--requires-ack", "--json",
+        ],
+    );
+    let sent_json: serde_json::Value = serde_json::from_slice(&sent.stdout).unwrap();
+    let message_id = sent_json["message_id"].as_str().unwrap();
+
+    // Reading the ask records a non-terminal `read` receipt, which must NOT
+    // satisfy the obligation: the view still flags the ask as owed.
+    let read = run(&bus, &["read", "bob", message_id, "--json"]);
+    let view: serde_json::Value = serde_json::from_slice(&read.stdout).unwrap();
+    assert_eq!(view["my_status"], "read", "read receipt is recorded");
+    assert_eq!(view["unread"], false, "the reader just read it");
+    assert_eq!(
+        view["awaiting_me"], true,
+        "a non-terminal read must not discharge the ask"
+    );
+    // The raw message fields remain present (the view is a superset).
+    assert_eq!(view["id"], message_id);
+    assert_eq!(view["from"], "alice");
+
+    // A terminal ack closes it; a fresh read then reports the ask as no longer owed.
+    run(&bus, &["ack", "bob", message_id, "--status", "done"]);
+    let after = run(&bus, &["read", "bob", message_id, "--json"]);
+    let after_view: serde_json::Value = serde_json::from_slice(&after.stdout).unwrap();
+    assert_eq!(after_view["awaiting_me"], false);
+    assert_eq!(after_view["my_status"], "done");
+}

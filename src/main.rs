@@ -2333,9 +2333,16 @@ fn cmd_read(root: &Path, args: ReadArgs) -> Result<()> {
         LOCK_TIMEOUT_SECONDS,
     )?;
     write_receipt(root, &agent_id, &message, "read", None)?;
+    // Emit the viewer-relative view (a superset of the raw message), matching
+    // `inbox`/`show`. A non-terminal `read` receipt does not satisfy an ask, so
+    // `awaiting_me` still flags an open ask the reader owes — without this the
+    // agent had to make a separate `awaiting` call to learn that reading the
+    // message did not discharge its obligation.
+    let view = build_view(root, message, &agent_id)?;
     if args.json {
-        println!("{}", serde_json::to_string_pretty(&message)?);
+        println!("{}", serde_json::to_string_pretty(&view)?);
     } else {
+        let message = &view.message;
         println!(
             "{} {} {} -> {:?}",
             message.id, message.conversation_id, message.from, message.to
@@ -2344,6 +2351,14 @@ fn cmd_read(root: &Path, args: ReadArgs) -> Result<()> {
             println!("Subject: {}", message.subject);
         }
         println!("\n{}", message.body);
+        if view.awaiting_me {
+            let wants = if await_kind(message) == "needs_response" {
+                "reply"
+            } else {
+                "ack"
+            };
+            println!("\nawaiting: you still owe a {wants} on this");
+        }
         println!("\nsource={}", path.display());
     }
     Ok(())
@@ -3193,9 +3208,18 @@ fn write_receipt(
         at: iso_now(),
         note: note.clone(),
     });
-    receipt.status = status.to_string();
+    // A bare `read` marker records that the agent saw the message; it must never
+    // downgrade an explicit ack. Re-reading (or `watch` auto-reading) a message
+    // you already marked `done`/`rejected` — or any non-`read` status — would
+    // otherwise revert the receipt to `read`, silently reopening the ask and
+    // un-resolving the asker's `wait --owed`. Preserve the stronger status and
+    // its note; still stamp the read in history and `read_at`.
+    let preserve_status = status == "read" && receipt.status != "read";
+    if !preserve_status {
+        receipt.status = status.to_string();
+        receipt.note = note;
+    }
     receipt.updated_at = iso_now();
-    receipt.note = note;
     if status == "read" && receipt.read_at.is_none() {
         receipt.read_at = Some(iso_now());
     }
