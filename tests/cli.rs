@@ -3410,3 +3410,41 @@ fn rate_limit_and_size_errors_carry_recovery_details() {
         "retry_after_seconds should fall within the window, got {retry}"
     );
 }
+
+#[test]
+fn help_lists_every_valid_enumeration_value() {
+    // An agent reading --help should discover every legal string for the
+    // enumerated arguments without trial-and-error or reading the source.
+    let help_of = |args: &[&str]| -> String {
+        let out = Command::new(bin()).args(args).output().unwrap();
+        assert!(out.status.success(), "{args:?} --help should exit 0");
+        String::from_utf8(out.stdout).unwrap()
+    };
+
+    // Agent states: `away` was previously omitted from the help.
+    let state_help = help_of(&["state", "set", "--help"]);
+    for value in ["idle", "working", "blocked", "away"] {
+        assert!(
+            state_help.contains(value),
+            "state set --help should list the {value:?} state"
+        );
+    }
+
+    // Ack statuses: the summary previously truncated the set with "...".
+    let ack_help = help_of(&["ack", "--help"]);
+    for value in ["received", "accepted", "working", "blocked", "done", "rejected"] {
+        assert!(
+            ack_help.contains(value),
+            "ack --help should list the {value:?} status"
+        );
+    }
+
+    // Send kinds: `receipt` was previously hidden behind a "...".
+    let send_help = help_of(&["send", "--help"]);
+    for value in ["message", "event", "receipt"] {
+        assert!(
+            send_help.contains(value),
+            "send --help should list the {value:?} kind"
+        );
+    }
+}

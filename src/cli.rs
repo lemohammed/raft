@@ -64,7 +64,7 @@ pub(crate) enum Commands {
     Register(RegisterArgs),
     /// Refresh an agent's heartbeat so it stays live (optionally in a loop).
     Heartbeat(HeartbeatArgs),
-    /// Get or set an agent's published state (e.g. working, blocked, idle).
+    /// Get or set an agent's published state (one of: idle, working, blocked, away).
     State {
         #[command(subcommand)]
         command: StateCommand,
@@ -103,7 +103,7 @@ pub(crate) enum Commands {
     Thread(ThreadArgs),
     /// Mark a message read for an agent, recording a read receipt.
     Read(ReadArgs),
-    /// Record an acknowledgement receipt (done, accepted, blocked, ...).
+    /// Record an acknowledgement receipt (received, accepted, working, blocked, done, rejected).
     Ack(AckArgs),
     /// Show the receipts recorded against a message.
     Receipts(ReceiptsArgs),
@@ -194,7 +194,7 @@ pub(crate) enum StateCommand {
 pub(crate) struct StateSetArgs {
     /// Agent whose state to set.
     pub(crate) agent: String,
-    /// State label to publish (e.g. working, blocked, idle).
+    /// State label to publish. One of: idle, working, blocked, away.
     pub(crate) state: String,
     /// Optional human-readable note attached to the state.
     #[arg(long)]
@@ -412,7 +412,7 @@ pub(crate) struct SendArgs {
     /// Message body.
     #[arg(long)]
     pub(crate) body: String,
-    /// Message kind (message, event, ...).
+    /// Message kind. One of: message, event, receipt (`system` is reserved for raft).
     #[arg(long, default_value = "message")]
     pub(crate) kind: String,
     /// Id of the message this one replies to (threads the reply).

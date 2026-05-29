@@ -214,7 +214,8 @@ raft heartbeat homekeep-dev --watch --ttl 120 --interval 60
 ```
 
 Agents can publish presence on the bus so other monitors do not have to infer
-idle/working/blocked state from out-of-band chat:
+state from out-of-band chat. The published state is one of `idle`, `working`,
+`blocked`, or `away`:
 
 ```sh
 raft state set homekeep-dev working --note "running booking regression tests"

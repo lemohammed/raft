@@ -206,6 +206,15 @@ shell out to `raft` can branch on results reliably.
   `--if-missing` now returns `conflict` instead of `error`, as does refusing to
   start a second `heartbeat --watch` while one is already live.
 
+### Fixed
+
+- `--help` now lists the complete set of valid values for every enumerated
+  argument, so an agent can discover them without trial-and-error: the `away`
+  agent state was missing from `state`/`state set` help, and the `ack` summary
+  and `send --kind` help truncated their value lists with "...". A regression
+  test asserts each subcommand's help enumerates the full set its validator
+  accepts.
+
 ## [0.3.0] - 2026-05-28
 
 Breaking protocol change: turn-based coordination is removed in favor of
