@@ -1210,7 +1210,7 @@ fn cmd_withdraw(root: &Path, args: WithdrawArgs) -> Result<()> {
         }
         return Ok(());
     }
-    let (_, meta) = load_conversation(root, &message.conversation_id)?;
+    let (conv, meta) = load_conversation(root, &message.conversation_id)?;
     let released = message_awaited(&message, &meta);
     if released.is_empty() {
         bail_code!(
@@ -1221,11 +1221,35 @@ fn cmd_withdraw(root: &Path, args: WithdrawArgs) -> Result<()> {
     }
     let at = iso_now();
     message.withdrawn = Some(Withdrawal {
-        by: asker,
+        by: asker.clone(),
         at: at.clone(),
-        reason: args.reason,
+        reason: args.reason.clone(),
     });
     atomic_write_json(&path, &message)?;
+    // Drop a discoverable lifecycle notice for the released workers, mirroring
+    // the `participant removed`/`channel left`/`state changed` notices. Without
+    // it the asymmetry is stark: the sender gets `released[]` back, but a worker
+    // who already acked `working` only sees the item silently vanish from
+    // `you_owe`, with no way to tell withdrawn from done-by-someone-else from a
+    // bug. The notice names the ask and carries the reason so the worker can
+    // correlate and stop in-flight work. Like the other notices it is `system`
+    // kind, so it surfaces through `inbox`/`show`/`thread` rather than as a new
+    // unread item or open ask.
+    let reason_clause = match &args.reason {
+        Some(reason) if !reason.trim().is_empty() => format!(" reason: {reason}"),
+        _ => String::new(),
+    };
+    let notice = format!(
+        "@{asker} withdrew their ask {:?} (message {}).{reason_clause}",
+        message.subject, message.id
+    );
+    write_system_message(
+        &conv,
+        &message.conversation_id,
+        released.clone(),
+        notice,
+        "ask withdrawn",
+    )?;
     if json {
         emit_ok(serde_json::json!({
             "message_id": message.id,

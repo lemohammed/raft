@@ -156,7 +156,11 @@ counting against everyone. Only the original sender can withdraw, and the ask
 drops out of every `awaited` view at once — the awaited agents' `you_owe`, your
 own `owed_to_you`, the roster counts, and any `wait --owed` blocked on it.
 Withdrawing is idempotent, and the `--json` envelope returns `released[]` (the
-agents whose obligation was lifted):
+agents whose obligation was lifted). Each released worker also gets a
+discoverable `ask withdrawn` system notice (visible in `inbox`/`show`/`thread`,
+like the `participant removed`/`channel left` notices) that names the ask and
+carries the reason — so a worker who already acked `working` learns why the ask
+vanished from its `you_owe` instead of seeing it disappear silently:
 
 ```sh
 raft withdraw "$MESSAGE_ID" --from homekeep-dev --reason "fixed it myself"

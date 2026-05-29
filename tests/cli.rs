@@ -3503,6 +3503,26 @@ fn withdraw_closes_an_open_ask_the_sender_no_longer_needs() {
     let alice_after_json: serde_json::Value = serde_json::from_slice(&alice_after.stdout).unwrap();
     assert!(alice_after_json["owed_to_you"].as_array().unwrap().is_empty());
 
+    // The released worker gets a discoverable lifecycle notice naming the ask
+    // and carrying the reason, so the silent disappearance from `you_owe` has an
+    // explanation. Like other system notices it is not a new unread item or an
+    // open ask for bob.
+    let bob_view = run(&bus, &["show", "--agent", "bob", "--conversation", "c", "--json"]);
+    let bob_view_json: serde_json::Value = serde_json::from_slice(&bob_view.stdout).unwrap();
+    let notice = bob_view_json
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["subject"] == "ask withdrawn")
+        .expect("released worker should see an `ask withdrawn` notice");
+    assert_eq!(notice["kind"], "system");
+    assert_eq!(notice["from"], "raft");
+    assert_eq!(notice["unread"], false);
+    assert_eq!(notice["awaiting_me"], false);
+    let body = notice["body"].as_str().unwrap();
+    assert!(body.contains(&message_id), "notice should name the ask id");
+    assert!(body.contains("moot"), "notice should carry the reason");
+
     // Withdrawing again is an idempotent no-op success.
     let again = run(&bus, &["withdraw", &message_id, "--from", "alice", "--json"]);
     let again_json: serde_json::Value = serde_json::from_slice(&again.stdout).unwrap();

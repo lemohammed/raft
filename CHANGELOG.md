@@ -22,7 +22,13 @@ shell out to `raft` can branch on results reliably.
   original sender may withdraw (a non-sender gets `not_found`, mirroring
   `wait --resolved`); withdrawing is idempotent; and the `--json` envelope
   returns `released[]` (the agents whose obligation was lifted), `withdrawn`,
-  and `already_withdrawn`.
+  and `already_withdrawn`. Each released worker also receives a discoverable
+  `ask withdrawn` system notice (surfaced through `inbox`/`show`/`thread`, like
+  the existing `participant removed`/`channel left` notices) that names the ask
+  and carries the withdrawal reason. This closes the asymmetry where the sender
+  got `released[]` back but a worker who had already acked `working` only saw
+  the ask vanish silently from its `you_owe`, unable to tell a withdrawal from a
+  done-by-someone-else or a bug.
 - `rate_limited` and `too_large` send errors now carry structured `details` in
   the `--json` error envelope. `rate_limited` adds `retry_after_seconds` (until
   the sender's window resets), `window_seconds`, `max_messages_per_sender`, and
