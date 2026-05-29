@@ -17,7 +17,10 @@ shell out to `raft` can branch on results reliably.
   sender — overridable via `--to`/`--subject`. Replaces the three-flag
   `send --conversation … --to … --after …` dance that replying previously
   required. Supports `--requires-ack`, `--needs-response-from`, and `--json`
-  (the envelope adds `after`).
+  (the envelope adds `after`). `--ack <status>` (with optional `--ack-note`)
+  also records an acknowledgement receipt on the parent in the same call, so
+  `--ack done` answers and closes an ask at once; an invalid status is rejected
+  before the reply is sent.
 - `roster` now reports each agent's advertised `capabilities`, and a
   `--capability <tag>` filter narrows the roster to agents offering a given
   skill — so an agent can discover a live peer to delegate to without dumping

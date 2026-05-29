@@ -401,6 +401,14 @@ pub(crate) struct ReplyArgs {
     /// Comma-separated agents whose reply is awaited (advisory).
     #[arg(long = "needs-response-from", default_value = "")]
     pub(crate) needs_response_from: String,
+    /// Also record this acknowledgement status on the parent message, e.g.
+    /// `done` to close the ask in the same call. One of: received, accepted,
+    /// working, blocked, done, rejected.
+    #[arg(long)]
+    pub(crate) ack: Option<String>,
+    /// Note to attach to the --ack receipt.
+    #[arg(long = "ack-note")]
+    pub(crate) ack_note: Option<String>,
     /// Emit a machine-readable JSON envelope instead of the message id.
     #[arg(long)]
     pub(crate) json: bool,

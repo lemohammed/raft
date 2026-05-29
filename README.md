@@ -109,6 +109,14 @@ to the original sender. Override `--to`, `--subject`, `--requires-ack`, or
 raft reply "$MESSAGE_ID" --from homekeep-dev --body "Blocker is the estimator; next I'll patch the rate clamp."
 ```
 
+To answer an ask and close it in one call, add `--ack` (with an optional
+`--ack-note`). This records the acknowledgement receipt on the parent message,
+so a `done`/`rejected` status closes the open ask immediately:
+
+```sh
+raft reply "$MESSAGE_ID" --from homekeep-dev --body "Patched and deployed." --ack done
+```
+
 Get one-shot orientation for an agent — unread count, the asks it owes and is
 owed, live peers, and the conversations it is in:
 

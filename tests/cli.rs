@@ -2421,3 +2421,67 @@ fn reply_inherits_conversation_thread_and_subject() {
     let err: serde_json::Value = serde_json::from_slice(&denied.stderr).unwrap();
     assert_eq!(err["error"]["code"], "not_participant");
 }
+
+#[test]
+fn reply_with_ack_closes_the_open_ask() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(&bus, &["claim", "alice", "--workspace", "."]);
+    run(&bus, &["claim", "bob", "--workspace", "."]);
+    run(
+        &bus,
+        &[
+            "conversation", "create", "proj", "--participants", "alice,bob",
+            "--starter", "alice",
+        ],
+    );
+    let parent = run(
+        &bus,
+        &[
+            "send", "--conversation", "proj", "--from", "alice", "--to", "bob",
+            "--subject", "task", "--body", "do X", "--requires-ack",
+            "--needs-response-from", "bob",
+        ],
+    );
+    let parent_id = String::from_utf8(parent.stdout).unwrap().trim().to_string();
+
+    // Bob owes a response before replying.
+    let before = run(&bus, &["awaiting", "bob", "--json"]);
+    let before_json: serde_json::Value = serde_json::from_slice(&before.stdout).unwrap();
+    assert_eq!(before_json["you_owe"].as_array().unwrap().len(), 1);
+
+    // reply --ack done both sends a reply and records a terminal receipt.
+    let reply = run(
+        &bus,
+        &[
+            "reply", &parent_id, "--from", "bob", "--body", "done it",
+            "--ack", "done", "--ack-note", "shipped", "--json",
+        ],
+    );
+    let reply_json: serde_json::Value = serde_json::from_slice(&reply.stdout).unwrap();
+    assert_eq!(reply_json["ack"], "done");
+
+    // The ask is now closed.
+    let after = run(&bus, &["awaiting", "bob", "--json"]);
+    let after_json: serde_json::Value = serde_json::from_slice(&after.stdout).unwrap();
+    assert_eq!(after_json["you_owe"].as_array().unwrap().len(), 0);
+
+    // The receipt landed on the parent with the note.
+    let receipts = run(&bus, &["receipts", &parent_id, "--json"]);
+    let receipts_json: serde_json::Value = serde_json::from_slice(&receipts.stdout).unwrap();
+    assert_eq!(receipts_json["receipts"]["bob"]["status"], "done");
+    assert_eq!(receipts_json["receipts"]["bob"]["note"], "shipped");
+
+    // An invalid ack status is rejected before any reply is sent.
+    let before_count = std::fs::read_dir(bus.join("conversations/proj/messages"))
+        .unwrap()
+        .count();
+    run_fail(
+        &bus,
+        &["reply", &parent_id, "--from", "bob", "--body", "x", "--ack", "finished"],
+    );
+    let after_count = std::fs::read_dir(bus.join("conversations/proj/messages"))
+        .unwrap()
+        .count();
+    assert_eq!(before_count, after_count, "bad ack status must not send a reply");
+}

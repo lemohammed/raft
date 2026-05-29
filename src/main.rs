@@ -923,13 +923,21 @@ fn cmd_reply(root: &Path, args: ReplyArgs) -> Result<()> {
     ensure_root(root)?;
     let (_, parent) = find_message(root, &args.message)?;
     let json = args.json;
+    let sender = validate_id(&args.sender, "sender")?;
+    // Validate the optional ack status up front so a bad status fails before we
+    // send the reply, rather than leaving a sent reply with no receipt.
+    let ack_status = args
+        .ack
+        .as_deref()
+        .map(validate_ack_status)
+        .transpose()?;
     let to = args.to.unwrap_or_else(|| parent.from.clone());
     let subject = args.subject.unwrap_or_else(|| parent.subject.clone());
     let message = send_message(
         root,
         SendMessageInput {
             conversation_id: parent.conversation_id.clone(),
-            sender: args.sender,
+            sender: sender.clone(),
             to,
             subject,
             body: args.body,
@@ -940,6 +948,15 @@ fn cmd_reply(root: &Path, args: ReplyArgs) -> Result<()> {
             needs_response_from: args.needs_response_from,
         },
     )?;
+    if let Some(status) = &ack_status {
+        let _lock = DirLock::acquire(
+            root,
+            &format!("conversation-{}", parent.conversation_id),
+            LOCK_TTL_SECONDS,
+            LOCK_TIMEOUT_SECONDS,
+        )?;
+        write_receipt(root, &sender, &parent, status, args.ack_note)?;
+    }
     if json {
         println!(
             "{}",
@@ -951,6 +968,7 @@ fn cmd_reply(root: &Path, args: ReplyArgs) -> Result<()> {
                 "mentions": message.mentions,
                 "needs_response_from": message.needs_response_from,
                 "after": message.after,
+                "ack": ack_status,
             }))?
         );
     } else {
