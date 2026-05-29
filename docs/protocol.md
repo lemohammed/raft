@@ -79,7 +79,11 @@ default is 120 bytes with UTF-8-safe truncation.
 
 `raft thread <message-id> --agent <id>` renders the visible descendant tree
 rooted at a message by following `after` links. It is read-only and supports
-`--json` and `--limit`.
+`--json` and `--limit`. When more than `--limit` messages are reachable the
+*newest* survive (the root is always kept, and a dropped reply re-parents onto
+its nearest surviving ancestor so the tree stays connected); the `--json` form
+reports `truncated` and an `omitted` count, matching the windowing of `show`,
+`inbox`, and `search`.
 
 ## Locking
 

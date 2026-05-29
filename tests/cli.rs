@@ -1424,6 +1424,81 @@ fn thread_renders_after_descendants_as_tree() {
 }
 
 #[test]
+fn thread_limit_keeps_the_newest_replies_not_the_oldest() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(
+        &bus,
+        &[
+            "conversation",
+            "create",
+            "c",
+            "--participants",
+            "a,b",
+            "--starter",
+            "a",
+        ],
+    );
+    let root = run(
+        &bus,
+        &[
+            "send", "--conversation", "c", "--from", "a", "--to", "b", "--body", "root topic",
+        ],
+    );
+    let root_id = String::from_utf8_lossy(&root.stdout).trim().to_string();
+
+    // Five direct replies; ids increase with send order so the last ones sent
+    // are the newest.
+    let mut child_ids = Vec::new();
+    for index in 0..5 {
+        let reply = run(
+            &bus,
+            &[
+                "send",
+                "--conversation",
+                "c",
+                "--from",
+                "a",
+                "--to",
+                "b",
+                "--after",
+                &root_id,
+                "--body",
+                &format!("reply {index}"),
+            ],
+        );
+        child_ids.push(String::from_utf8_lossy(&reply.stdout).trim().to_string());
+    }
+
+    // --limit 3 keeps the root plus the 2 newest replies; the 3 oldest drop.
+    let json = run(
+        &bus,
+        &["thread", &root_id, "--agent", "b", "--limit", "3", "--json"],
+    );
+    let view: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
+    assert_eq!(view["message"]["id"], root_id);
+    assert_eq!(view["truncated"], true);
+    assert_eq!(view["omitted"], 3);
+    let kept: Vec<String> = view["children"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|child| child["message"]["id"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(kept, vec![child_ids[3].clone(), child_ids[4].clone()]);
+
+    // Without a binding limit nothing is omitted.
+    let full = run(
+        &bus,
+        &["thread", &root_id, "--agent", "b", "--limit", "100", "--json"],
+    );
+    let full_view: serde_json::Value = serde_json::from_slice(&full.stdout).unwrap();
+    assert_eq!(full_view["truncated"], false);
+    assert_eq!(full_view["omitted"], 0);
+    assert_eq!(full_view["children"].as_array().unwrap().len(), 5);
+}
+
+#[test]
 fn receipts_report_read_and_ack_statuses() {
     let bus = temp_bus();
     run(&bus, &["init"]);

@@ -2387,13 +2387,21 @@ fn cmd_thread(root: &Path, args: ThreadArgs) -> Result<()> {
     }
     let mut rows = visible_messages(root, &agent_id, Some(&root_message.conversation_id))?;
     rows.sort_by(|left, right| left.id.cmp(&right.id));
-    let mut remaining = args.limit.max(1);
-    let mut visited = BTreeSet::new();
-    let tree = build_thread_node(&root_message.id, &rows, &mut remaining, &mut visited)?;
+    let (tree, omitted) = build_thread_view(&root_message.id, &rows, args.limit)?;
     if args.json {
-        println!("{}", serde_json::to_string_pretty(&tree)?);
+        let view = ThreadView {
+            root: tree,
+            truncated: omitted > 0,
+            omitted,
+        };
+        println!("{}", serde_json::to_string_pretty(&view)?);
     } else {
         print_thread_node(&tree, 0);
+        if omitted > 0 {
+            println!(
+                "\n... {omitted} earlier message(s) omitted; raise --limit to see them"
+            );
+        }
     }
     Ok(())
 }
@@ -3129,44 +3137,109 @@ fn truncated_body(body: &str, width: usize) -> String {
     body
 }
 
-fn build_thread_node(
-    message_id: &str,
+/// Build the thread tree rooted at `root_id`, keeping at most `limit` messages.
+/// When the reachable subtree is larger than the budget the *newest* messages
+/// are kept (root is always kept), matching the windowing of `show`, `inbox`,
+/// and `search`. Returns the assembled tree plus the count of omitted messages.
+/// Dropped messages are spliced out: a survivor re-parents onto its nearest
+/// surviving ancestor so the tree stays connected rather than losing branches.
+fn build_thread_view(
+    root_id: &str,
     messages: &[Message],
-    remaining: &mut usize,
-    visited: &mut BTreeSet<String>,
-) -> Result<ThreadNode> {
-    let message = messages
-        .iter()
-        .find(|message| message.id == message_id)
-        .ok_or_else(|| {
-            RaftError::new(format!(
-                "message {message_id:?} was not found in visible thread"
-            ))
-        })?;
-    if *remaining == 0 || !visited.insert(message.id.clone()) {
-        return Ok(ThreadNode {
-            message: message.clone(),
-            children: Vec::new(),
-        });
+    limit: usize,
+) -> Result<(ThreadNode, usize)> {
+    let by_id: BTreeMap<&str, &Message> =
+        messages.iter().map(|message| (message.id.as_str(), message)).collect();
+    if !by_id.contains_key(root_id) {
+        return Err(RaftError::new(format!(
+            "message {root_id:?} was not found in visible thread"
+        )));
     }
-    *remaining -= 1;
-    let mut children = Vec::new();
-    for child in messages
-        .iter()
-        .filter(|candidate| candidate.after.as_deref() == Some(message_id))
-    {
-        if *remaining == 0 {
-            break;
+
+    // Walk `after` pointers downward from the root to collect the reachable
+    // subtree, guarding against cycles.
+    let mut children_of: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for message in messages {
+        if let Some(parent) = message.after.as_deref() {
+            children_of.entry(parent).or_default().push(message.id.as_str());
         }
-        if visited.contains(&child.id) {
+    }
+    let mut reachable: BTreeSet<&str> = BTreeSet::new();
+    let mut stack = vec![root_id];
+    while let Some(id) = stack.pop() {
+        if !reachable.insert(id) {
             continue;
         }
-        children.push(build_thread_node(&child.id, messages, remaining, visited)?);
+        if let Some(kids) = children_of.get(id) {
+            stack.extend(kids.iter().copied());
+        }
     }
-    Ok(ThreadNode {
-        message: message.clone(),
-        children,
-    })
+
+    let total = reachable.len();
+    let limit = limit.max(1);
+    let kept: BTreeSet<&str> = if total <= limit {
+        reachable.clone()
+    } else {
+        // Keep the root plus the newest `limit - 1` of the remaining reachable
+        // ids. Ids are monotonically increasing, so highest id == most recent.
+        let mut others: Vec<&str> =
+            reachable.iter().copied().filter(|id| *id != root_id).collect();
+        others.sort();
+        let tail = &others[others.len() - (limit - 1)..];
+        let mut kept: BTreeSet<&str> = tail.iter().copied().collect();
+        kept.insert(root_id);
+        kept
+    };
+    let omitted = total - kept.len();
+
+    // Re-parent each surviving non-root message onto its nearest surviving
+    // ancestor (walk the `after` chain until a kept id is found; the root is
+    // always kept, so this terminates).
+    let mut display_children: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for &id in &kept {
+        if id == root_id {
+            continue;
+        }
+        let mut ancestor = by_id[id].after.as_deref();
+        while let Some(parent) = ancestor {
+            if kept.contains(parent) {
+                display_children.entry(parent).or_default().push(id);
+                break;
+            }
+            ancestor = by_id.get(parent).and_then(|message| message.after.as_deref());
+        }
+    }
+    for kids in display_children.values_mut() {
+        kids.sort();
+    }
+
+    let mut visited: BTreeSet<&str> = BTreeSet::new();
+    let tree = assemble_thread_node(root_id, &by_id, &display_children, &mut visited);
+    Ok((tree, omitted))
+}
+
+fn assemble_thread_node<'a>(
+    id: &'a str,
+    by_id: &BTreeMap<&'a str, &'a Message>,
+    display_children: &BTreeMap<&'a str, Vec<&'a str>>,
+    visited: &mut BTreeSet<&'a str>,
+) -> ThreadNode {
+    let message = (*by_id.get(id).expect("kept id must exist")).clone();
+    if !visited.insert(id) {
+        return ThreadNode {
+            message,
+            children: Vec::new(),
+        };
+    }
+    let children = display_children
+        .get(id)
+        .map(|kids| {
+            kids.iter()
+                .map(|child| assemble_thread_node(child, by_id, display_children, visited))
+                .collect()
+        })
+        .unwrap_or_default();
+    ThreadNode { message, children }
 }
 
 fn print_thread_node(node: &ThreadNode, depth: usize) {

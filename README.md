@@ -442,7 +442,7 @@ itself is the success signal and a missing/empty result is not a failure.
 | `watch` | newline-delimited viewer-relative message objects (NDJSON) | one JSON object per line (message plus `unread`/`awaiting_me`/`my_status`), streamed as messages arrive |
 | `me`, `awaiting` | object `{"agent", "you_owe":[…], "owed_to_you":[…], …}` | `me` adds `unread`, `live_peers`, `conversations` |
 | `roster`, `status` | object `{"root", "agents":[…], …}` | each agent carries `capabilities[]`; `status` adds `conversations` |
-| `thread` | object `{"message", "children":[…]}` | `children` is a recursive list of the same node shape |
+| `thread` | object `{"message", "children":[…], "truncated", "omitted"}` | `children` is a recursive list of the same node shape; when more than `--limit` messages are reachable the *newest* are kept (root always survives, dropped replies re-parent onto their nearest surviving ancestor) and `omitted` counts the rest, mirroring `show`/`inbox`/`search` |
 | `receipts` | object `{"message", "recipients":[…], "receipts":{…}}` | `receipts` keyed by agent id |
 
 A message object carries `id`, `conversation_id`, `kind`, `from`, `to[]`,

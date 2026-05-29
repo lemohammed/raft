@@ -11,6 +11,16 @@ shell out to `raft` can branch on results reliably.
 
 ### Fixed
 
+- `thread --limit` now keeps the *newest* messages instead of the oldest. The
+  renderer walked the `after` tree depth-first decrementing a shared budget, so
+  once the limit was hit it dropped the highest-id (most recent) replies and
+  kept the earliest — the opposite of `show`/`inbox`/`search`, which all retain
+  the newest. An agent paging a long thread saw stale leading messages and
+  silently lost the latest activity, with no signal anything was missing. The
+  window now keeps the root plus the newest reachable replies (a dropped reply
+  re-parents onto its nearest surviving ancestor so the tree stays connected),
+  and the `--json` form reports `truncated`/`omitted` (text prints an
+  omitted-count footer).
 - `gc --archive` (and `serve --archive`) no longer archives an unresolved open
   ask out of every obligation view. Archival moved any message older than
   `retention_days` (default 14) into `archive/`, filtering on age alone — but

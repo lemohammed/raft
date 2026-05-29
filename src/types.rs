@@ -187,6 +187,19 @@ pub(crate) struct ThreadNode {
     pub(crate) children: Vec<ThreadNode>,
 }
 
+/// The rendered thread plus a truncation signal. The root `ThreadNode` is
+/// flattened in, so a `--json` reader sees the same `message`/`children` shape
+/// as before plus `truncated`/`omitted` at the top level. When the thread has
+/// more messages than `--limit`, the *newest* are kept (matching `show`,
+/// `inbox`, and `search`) and `omitted` counts the dropped earlier ones.
+#[derive(Serialize)]
+pub(crate) struct ThreadView {
+    #[serde(flatten)]
+    pub(crate) root: ThreadNode,
+    pub(crate) truncated: bool,
+    pub(crate) omitted: usize,
+}
+
 #[derive(Serialize, Deserialize)]
 pub(crate) struct LockOwner {
     #[serde(rename = "_v", default = "schema_v1")]
