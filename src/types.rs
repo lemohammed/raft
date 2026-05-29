@@ -68,6 +68,18 @@ pub(crate) struct Message {
     #[serde(default)]
     pub(crate) subject_id: Option<String>,
     pub(crate) after: Option<String>,
+    /// Set when the sender retracts an ask it opened. Once present, the message
+    /// is no longer an open ask: it drops out of every `awaited` computation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) withdrawn: Option<Withdrawal>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub(crate) struct Withdrawal {
+    pub(crate) by: String,
+    pub(crate) at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) reason: Option<String>,
 }
 
 /// A `Message` decorated with fields relative to the agent reading it, so a

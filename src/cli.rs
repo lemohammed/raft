@@ -83,6 +83,8 @@ pub(crate) enum Commands {
     Send(SendArgs),
     /// Reply to a message, inheriting its conversation, thread, and subject.
     Reply(ReplyArgs),
+    /// Withdraw an ask you sent so it stops counting as open (you no longer need the reply).
+    Withdraw(WithdrawArgs),
     /// One-shot orientation summary for an agent (unread, asks, peers, rooms).
     Me(MeArgs),
     /// Show which replies an agent owes and which it is waiting on.
@@ -463,6 +465,21 @@ pub(crate) struct ReplyArgs {
     #[arg(long = "ack-note")]
     pub(crate) ack_note: Option<String>,
     /// Emit a machine-readable JSON envelope instead of the message id.
+    #[arg(long)]
+    pub(crate) json: bool,
+}
+
+#[derive(Args)]
+pub(crate) struct WithdrawArgs {
+    /// Agent withdrawing the ask. Must be the sender of the message.
+    #[arg(long)]
+    pub(crate) from: String,
+    /// Id of the ask to withdraw.
+    pub(crate) message_id: String,
+    /// Optional human-readable reason recorded with the withdrawal.
+    #[arg(long)]
+    pub(crate) reason: Option<String>,
+    /// Emit machine-readable JSON instead of text.
     #[arg(long)]
     pub(crate) json: bool,
 }

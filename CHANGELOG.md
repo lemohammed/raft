@@ -11,6 +11,18 @@ shell out to `raft` can branch on results reliably.
 
 ### Added
 
+- `withdraw <message-id> --from <sender>` retracts an open ask the sender no
+  longer needs answered. It stamps the message with a `withdrawn` marker so the
+  ask drops out of every `awaited` view at once — the awaited agents' `you_owe`,
+  the sender's `owed_to_you`, the roster owes/waiting-on counts, and any
+  `wait --owed` blocked on it. Previously a sender who opened an ask had no way
+  to take it back: a question that went moot, got solved another way, or was
+  re-routed stayed pinned to everyone's obligation lists forever, with no path
+  short of the recipient acking a reply that no longer made sense. Only the
+  original sender may withdraw (a non-sender gets `not_found`, mirroring
+  `wait --resolved`); withdrawing is idempotent; and the `--json` envelope
+  returns `released[]` (the agents whose obligation was lifted), `withdrawn`,
+  and `already_withdrawn`.
 - `rate_limited` and `too_large` send errors now carry structured `details` in
   the `--json` error envelope. `rate_limited` adds `retry_after_seconds` (until
   the sender's window resets), `window_seconds`, `max_messages_per_sender`, and

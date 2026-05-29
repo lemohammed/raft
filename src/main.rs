@@ -105,6 +105,7 @@ fn command_wants_json(command: &Commands) -> bool {
         },
         Commands::Send(args) => args.json,
         Commands::Reply(args) => args.json,
+        Commands::Withdraw(args) => args.json,
         Commands::Me(args) => args.json,
         Commands::Awaiting(args) => args.json,
         Commands::Roster(args) => args.json,
@@ -148,6 +149,7 @@ fn run(root: PathBuf, command: Commands) -> Result<()> {
         },
         Commands::Send(args) => cmd_send(&root, args),
         Commands::Reply(args) => cmd_reply(&root, args),
+        Commands::Withdraw(args) => cmd_withdraw(&root, args),
         Commands::Me(args) => cmd_me(&root, args),
         Commands::Awaiting(args) => cmd_awaiting(&root, args),
         Commands::Roster(args) => cmd_roster(&root, args),
@@ -1169,6 +1171,80 @@ fn warn_offline_recipients(offline: &[String]) {
     eprintln!("warning: offline recipient(s): {names}");
 }
 
+/// Retract an open ask the sender no longer needs answered. Marks the message
+/// with a `withdrawn` stamp so it drops out of every `awaited` computation
+/// (owed_to_you, roster owes, wait --owed) without deleting the message or
+/// fabricating per-recipient receipts. Only the original sender may withdraw.
+fn cmd_withdraw(root: &Path, args: WithdrawArgs) -> Result<()> {
+    ensure_root(root)?;
+    let asker = validate_id(&args.from, "from")?;
+    let json = args.json;
+    let (path, mut message) = find_message(root, &args.message_id)?;
+    let _lock = DirLock::acquire(
+        root,
+        &format!("conversation-{}", message.conversation_id),
+        LOCK_TTL_SECONDS,
+        LOCK_TIMEOUT_SECONDS,
+    )?;
+    // Only the sender owns the ask. Mirror `wait --resolved`: a non-sender is
+    // told the ask is not theirs via not_found rather than a distinct code.
+    if message.from != asker {
+        bail_code!(
+            "not_found",
+            "message {:?} is not an ask you sent",
+            message.id
+        );
+    }
+    // Idempotent: withdrawing an already-withdrawn ask is a no-op success.
+    if let Some(existing) = &message.withdrawn {
+        if json {
+            emit_ok(serde_json::json!({
+                "message_id": message.id,
+                "withdrawn": true,
+                "already_withdrawn": true,
+                "released": Vec::<String>::new(),
+                "at": existing.at,
+            }))?;
+        } else {
+            println!("already withdrawn");
+        }
+        return Ok(());
+    }
+    let (_, meta) = load_conversation(root, &message.conversation_id)?;
+    let released = message_awaited(&message, &meta);
+    if released.is_empty() {
+        bail_code!(
+            "not_found",
+            "message {:?} is not an open ask (nothing to withdraw)",
+            message.id
+        );
+    }
+    let at = iso_now();
+    message.withdrawn = Some(Withdrawal {
+        by: asker,
+        at: at.clone(),
+        reason: args.reason,
+    });
+    atomic_write_json(&path, &message)?;
+    if json {
+        emit_ok(serde_json::json!({
+            "message_id": message.id,
+            "withdrawn": true,
+            "already_withdrawn": false,
+            "released": released,
+            "at": at,
+        }))?;
+    } else {
+        let names = released
+            .iter()
+            .map(|id| format!("@{id}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        println!("withdrew ask {}; released: {names}", message.id);
+    }
+    Ok(())
+}
+
 pub(crate) fn send_message(root: &Path, input: SendMessageInput) -> Result<Message> {
     ensure_root(root)?;
     let _lock = DirLock::acquire(
@@ -1239,6 +1315,7 @@ pub(crate) fn send_message_locked(root: &Path, input: SendMessageInput) -> Resul
         needs_response_from,
         subject_id,
         after,
+        withdrawn: None,
     };
     atomic_write_json(
         &conv.join("messages").join(format!("{message_id}.json")),
@@ -1253,6 +1330,9 @@ fn ask_is_terminal(status: &str) -> bool {
 }
 
 fn message_awaited(message: &Message, meta: &Meta) -> Vec<String> {
+    if message.withdrawn.is_some() {
+        return Vec::new();
+    }
     let awaited = if !message.needs_response_from.is_empty() {
         message.needs_response_from.clone()
     } else if message.requires_ack {
@@ -3095,6 +3175,7 @@ pub(crate) fn write_system_message(
         needs_response_from: Vec::new(),
         subject_id: None,
         after: None,
+        withdrawn: None,
     };
     atomic_write_json(
         &conv.join("messages").join(format!("{message_id}.json")),

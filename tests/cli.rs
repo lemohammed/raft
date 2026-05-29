@@ -3448,3 +3448,92 @@ fn help_lists_every_valid_enumeration_value() {
         );
     }
 }
+
+#[test]
+fn withdraw_closes_an_open_ask_the_sender_no_longer_needs() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(&bus, &["claim", "alice", "--workspace", "."]);
+    run(&bus, &["claim", "bob", "--workspace", "."]);
+    run(
+        &bus,
+        &[
+            "conversation", "create", "c", "--participants", "alice,bob",
+            "--starter", "alice",
+        ],
+    );
+    let sent = run(
+        &bus,
+        &[
+            "send", "--conversation", "c", "--from", "alice", "--to", "bob",
+            "--subject", "Q", "--body", "ship it", "--needs-response-from", "bob",
+        ],
+    );
+    let message_id = String::from_utf8_lossy(&sent.stdout).trim().to_string();
+
+    // Pre-state: bob owes a response and alice is owed one.
+    let bob_before = run(&bus, &["awaiting", "bob", "--json"]);
+    let bob_before_json: serde_json::Value = serde_json::from_slice(&bob_before.stdout).unwrap();
+    assert_eq!(bob_before_json["you_owe"].as_array().unwrap().len(), 1);
+
+    // A non-sender cannot withdraw someone else's ask: it isn't theirs.
+    let denied = run_fail(&bus, &["withdraw", &message_id, "--from", "bob", "--json"]);
+    let denied_json: serde_json::Value = serde_json::from_slice(&denied.stderr).unwrap();
+    assert_eq!(denied_json["error"]["code"], "not_found");
+
+    // The sender withdraws; the response set it releases names bob.
+    let withdrawn = run(
+        &bus,
+        &["withdraw", &message_id, "--from", "alice", "--reason", "moot", "--json"],
+    );
+    let withdrawn_json: serde_json::Value = serde_json::from_slice(&withdrawn.stdout).unwrap();
+    assert_eq!(withdrawn_json["ok"], true);
+    assert_eq!(withdrawn_json["withdrawn"], true);
+    assert_eq!(withdrawn_json["already_withdrawn"], false);
+    assert_eq!(
+        withdrawn_json["released"].as_array().unwrap(),
+        &vec![serde_json::json!("bob")]
+    );
+
+    // The ask drops out of both sides: bob no longer owes, alice is no longer owed.
+    let bob_after = run(&bus, &["awaiting", "bob", "--json"]);
+    let bob_after_json: serde_json::Value = serde_json::from_slice(&bob_after.stdout).unwrap();
+    assert!(bob_after_json["you_owe"].as_array().unwrap().is_empty());
+    let alice_after = run(&bus, &["awaiting", "alice", "--json"]);
+    let alice_after_json: serde_json::Value = serde_json::from_slice(&alice_after.stdout).unwrap();
+    assert!(alice_after_json["owed_to_you"].as_array().unwrap().is_empty());
+
+    // Withdrawing again is an idempotent no-op success.
+    let again = run(&bus, &["withdraw", &message_id, "--from", "alice", "--json"]);
+    let again_json: serde_json::Value = serde_json::from_slice(&again.stdout).unwrap();
+    assert_eq!(again_json["ok"], true);
+    assert_eq!(again_json["already_withdrawn"], true);
+    assert!(again_json["released"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn withdraw_rejects_a_message_that_is_not_an_open_ask() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(&bus, &["claim", "alice", "--workspace", "."]);
+    run(&bus, &["claim", "bob", "--workspace", "."]);
+    run(
+        &bus,
+        &[
+            "conversation", "create", "c", "--participants", "alice,bob",
+            "--starter", "alice",
+        ],
+    );
+    // A plain message with no ack expectation is not an open ask.
+    let sent = run(
+        &bus,
+        &[
+            "send", "--conversation", "c", "--from", "alice", "--to", "bob",
+            "--subject", "FYI", "--body", "no reply needed",
+        ],
+    );
+    let message_id = String::from_utf8_lossy(&sent.stdout).trim().to_string();
+    let denied = run_fail(&bus, &["withdraw", &message_id, "--from", "alice", "--json"]);
+    let denied_json: serde_json::Value = serde_json::from_slice(&denied.stderr).unwrap();
+    assert_eq!(denied_json["error"]["code"], "not_found");
+}

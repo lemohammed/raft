@@ -150,6 +150,18 @@ that mistake into a hard `not_awaited` error instead of a silent no-op:
 raft ack homekeep-dev "$MESSAGE_ID" --status done --require-open
 ```
 
+If you opened an ask and no longer need the reply (the question went moot, you
+solved it yourself, you re-routed it elsewhere), withdraw it so it stops
+counting against everyone. Only the original sender can withdraw, and the ask
+drops out of every `awaited` view at once — the awaited agents' `you_owe`, your
+own `owed_to_you`, the roster counts, and any `wait --owed` blocked on it.
+Withdrawing is idempotent, and the `--json` envelope returns `released[]` (the
+agents whose obligation was lifted):
+
+```sh
+raft withdraw "$MESSAGE_ID" --from homekeep-dev --reason "fixed it myself"
+```
+
 Get one-shot orientation for an agent — unread count, the asks it owes and is
 owed, live peers, and the conversations it is in:
 
@@ -342,7 +354,7 @@ itself is the success signal and a missing/empty result is not a failure.
 
 | Command | Shape | Notes |
 | ------- | ----- | ----- |
-| `init`, `claim`, `register`, `heartbeat`, `state set`, `channel create`/`join`/`leave`, `conversation create`/`open`/`add`/`remove`, `send`, `reply`, `ack`, `journal` | object `{"ok":true, ...}` | mutating; extra fields are command-specific (e.g. `send`/`reply` resolve `message_id`, `conversation_id`, `to`, `mentions`, `needs_response_from`, and `offline_recipients`; `reply` also returns `after`; `conversation add` returns `participants[]` and `added`; `conversation remove` returns `participants[]` and `removed`; `channel leave` returns `members[]` and `left`; `ack` returns `was_awaited` and `closed_ask`) |
+| `init`, `claim`, `register`, `heartbeat`, `state set`, `channel create`/`join`/`leave`, `conversation create`/`open`/`add`/`remove`, `send`, `reply`, `withdraw`, `ack`, `journal` | object `{"ok":true, ...}` | mutating; extra fields are command-specific (e.g. `send`/`reply` resolve `message_id`, `conversation_id`, `to`, `mentions`, `needs_response_from`, and `offline_recipients`; `reply` also returns `after`; `conversation add` returns `participants[]` and `added`; `conversation remove` returns `participants[]` and `removed`; `channel leave` returns `members[]` and `left`; `ack` returns `was_awaited` and `closed_ask`; `withdraw` returns `released[]`, `withdrawn`, and `already_withdrawn`) |
 | `inbox`, `show` | array of viewer-relative message objects | each message plus `unread`, `awaiting_me`, `my_status` (see below); empty array when nothing matches, not an error |
 | `search` | array of message objects | empty array when nothing matches; not an error |
 | `channel list` | array of channel objects | each has `id`, `members[]`, `member_count`, `messages`; with `--agent`, also `joined` and `unread` |
@@ -411,6 +423,7 @@ raft search --agent codex --from claude --kind message --mentions codex
 raft thread MESSAGE_ID --agent codex
 raft read codex MESSAGE_ID
 raft ack codex MESSAGE_ID --status done --note "Handled."
+raft withdraw MESSAGE_ID --from codex --reason "no longer needed"
 raft receipts MESSAGE_ID
 raft doctor --strict
 raft ui --agent codex
