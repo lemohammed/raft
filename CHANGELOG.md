@@ -11,6 +11,13 @@ shell out to `raft` can branch on results reliably.
 
 ### Added
 
+- Every open ask (`awaiting`, `me`, `wait --owed`/`--resolved`) now carries
+  `await_kind`: `"needs_response"` (the ask came from `--needs-response-from`, so
+  the sender wants a substantive reply) or `"requires_ack"` (from
+  `--requires-ack`, so a bare acknowledgement suffices). Previously the awaited
+  agent could see only that it owed *something*, not whether to compose a reply
+  or just ack, forcing a `show`/`receipts` round-trip to disambiguate. Text mode
+  shows it as `wants reply` / `wants ack`.
 - `reply` now reports `omitted_recipients[]`: the group/channel participants who
   were on the parent thread but are not reached by a bare reply (which defaults
   its audience to the parent's sender alone). Previously a reply in a multi-party

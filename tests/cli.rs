@@ -3770,3 +3770,51 @@ fn bare_reply_reports_thread_participants_it_did_not_reach() {
         "explicit --to covering the thread should omit nobody"
     );
 }
+
+#[test]
+fn open_asks_label_whether_a_reply_or_a_bare_ack_is_expected() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(&bus, &["claim", "alice", "--workspace", "."]);
+    run(&bus, &["claim", "bob", "--workspace", "."]);
+    run(
+        &bus,
+        &[
+            "conversation", "create", "room", "--participants", "alice,bob", "--starter", "alice",
+        ],
+    );
+
+    // A --requires-ack ask: a bare acknowledgement closes it.
+    run(
+        &bus,
+        &[
+            "send", "--conversation", "room", "--from", "alice", "--to", "bob", "--subject",
+            "deploy", "--body", "ship it", "--requires-ack",
+        ],
+    );
+    // A --needs-response-from ask: the sender wants a substantive reply.
+    run(
+        &bus,
+        &[
+            "send", "--conversation", "room", "--from", "alice", "--to", "bob", "--subject",
+            "design", "--body", "thoughts?", "--needs-response-from", "bob",
+        ],
+    );
+
+    let awaiting = run(&bus, &["awaiting", "bob", "--json"]);
+    let json: serde_json::Value = serde_json::from_slice(&awaiting.stdout).unwrap();
+    let owed = json["you_owe"].as_array().unwrap();
+    assert_eq!(owed.len(), 2, "bob owes two responses");
+
+    let kinds: std::collections::HashMap<&str, &str> = owed
+        .iter()
+        .map(|ask| {
+            (
+                ask["subject"].as_str().unwrap(),
+                ask["await_kind"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(kinds["deploy"], "requires_ack");
+    assert_eq!(kinds["design"], "needs_response");
+}

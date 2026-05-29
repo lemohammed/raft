@@ -1388,6 +1388,20 @@ fn ask_is_terminal(status: &str) -> bool {
     TERMINAL_ACK_STATUSES.contains(&status)
 }
 
+/// Why an agent is on a message's awaited set, mirroring `message_awaited`'s
+/// branch order: a `--needs-response-from` name means the sender wants a
+/// substantive reply, while `--requires-ack` means a bare acknowledgement
+/// closes it. `message_awaited` derives the set from exactly one of these, so a
+/// single label describes the whole set. Only meaningful when the awaited set is
+/// non-empty (the only context in which an `OpenAsk` is built).
+fn await_kind(message: &Message) -> &'static str {
+    if !message.needs_response_from.is_empty() {
+        "needs_response"
+    } else {
+        "requires_ack"
+    }
+}
+
 fn message_awaited(message: &Message, meta: &Meta) -> Vec<String> {
     if message.withdrawn.is_some() {
         return Vec::new();
@@ -1504,6 +1518,7 @@ pub(crate) fn gather_open_asks(
                     created_at: message.created_at.clone(),
                     status: status.unwrap_or_else(|| "none".to_string()),
                     awaited_live,
+                    await_kind: await_kind(&message),
                 });
             }
         }
@@ -1543,9 +1558,14 @@ fn cmd_awaiting(root: &Path, args: AwaitingArgs) -> Result<()> {
         println!("  nothing");
     }
     for ask in &incoming {
+        let wants = if ask.await_kind == "needs_response" {
+            "reply"
+        } else {
+            "ack"
+        };
         println!(
-            "  {} in {} from @{} [{}]: {}",
-            ask.message_id, ask.conversation_id, ask.from, ask.status, ask.subject
+            "  {} in {} from @{} [{}, wants {}]: {}",
+            ask.message_id, ask.conversation_id, ask.from, ask.status, wants, ask.subject
         );
     }
     println!("waiting on a response from others:");
@@ -2070,6 +2090,7 @@ fn resolved_ask_already_closed(
                 created_at: message.created_at.clone(),
                 status,
                 awaited_live: live_agent_ids(root)?.contains(who),
+                await_kind: await_kind(&message),
             };
             return emit_resolution(args, Some((ask, note)));
         }

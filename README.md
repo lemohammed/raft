@@ -209,6 +209,14 @@ A blocked asker can branch on it directly — an ask whose delegate is offline
 (`awaited_live: false`) is a candidate to re-route or escalate rather than keep
 waiting on. Text output flags it as `@agent (offline)`.
 
+Each open ask also carries `await_kind`: `"needs_response"` when the ask came
+from `--needs-response-from` (the sender wants a substantive reply) or
+`"requires_ack"` when it came from `--requires-ack` (a bare acknowledgement
+suffices). An agent triaging its `you_owe` list can branch on this to decide
+whether to compose a `reply` or just `ack` — either way the ask closes when a
+terminal `done`/`rejected` receipt is recorded (use `reply --ack` to do both at
+once). Text output shows it as `wants reply` / `wants ack`.
+
 The receiving agent can poll without busy-spinning:
 
 ```sh
