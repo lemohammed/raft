@@ -93,6 +93,7 @@ fn command_wants_json(command: &Commands) -> bool {
         Commands::Conversation { command } => match command {
             ConversationCommand::Create(args) => args.json,
             ConversationCommand::Open(args) => args.json,
+            ConversationCommand::Add(args) => args.json,
         },
         Commands::Send(args) => args.json,
         Commands::Reply(args) => args.json,
@@ -133,6 +134,7 @@ fn run(root: PathBuf, command: Commands) -> Result<()> {
         Commands::Conversation { command } => match command {
             ConversationCommand::Create(args) => cmd_conversation_create(&root, args),
             ConversationCommand::Open(args) => cmd_conversation_open(&root, args),
+            ConversationCommand::Add(args) => cmd_conversation_add(&root, args),
         },
         Commands::Send(args) => cmd_send(&root, args),
         Commands::Reply(args) => cmd_reply(&root, args),
@@ -881,6 +883,57 @@ fn cmd_conversation_open(root: &Path, args: ConversationOpenArgs) -> Result<()> 
             json: args.json,
         },
     )
+}
+
+fn cmd_conversation_add(root: &Path, args: ConversationAddArgs) -> Result<()> {
+    let conversation_id = validate_id(&args.conversation, "conversation id")?;
+    let agent_id = validate_id(&args.agent, "agent id")?;
+    ensure_root(root)?;
+    let _lock = DirLock::acquire(
+        root,
+        &format!("conversation-{conversation_id}"),
+        LOCK_TTL_SECONDS,
+        LOCK_TIMEOUT_SECONDS,
+    )?;
+    let conv = conversation_path(root, &conversation_id)?;
+    let mut meta: Meta = read_json(&conv.join("meta.json"))?.ok_or_else(|| {
+        RaftError::coded(
+            "not_found",
+            format!("conversation {conversation_id:?} does not exist"),
+        )
+    })?;
+    if meta.channel {
+        bail!("{conversation_id:?} is a channel; use `raft channel join` instead");
+    }
+    let already_participant = meta
+        .participants
+        .iter()
+        .any(|participant| participant == &agent_id);
+    if !already_participant {
+        meta.participants.push(agent_id.clone());
+        meta.updated_at = iso_now();
+        atomic_write_json(&conv.join("meta.json"), &meta)?;
+        write_system_message(
+            &conv,
+            &conversation_id,
+            meta.participants.clone(),
+            format!("@{agent_id} added to conversation {conversation_id}."),
+            "participant added",
+        )?;
+    }
+    if args.json {
+        emit_ok(serde_json::json!({
+            "conversation_id": conversation_id,
+            "agent": agent_id,
+            "added": !already_participant,
+            "participants": meta.participants,
+        }))?;
+    } else if already_participant {
+        println!("@{agent_id} is already a participant in {conversation_id}");
+    } else {
+        println!("@{agent_id} added to conversation {conversation_id}");
+    }
+    Ok(())
 }
 
 fn cmd_send(root: &Path, args: SendArgs) -> Result<()> {

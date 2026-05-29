@@ -11,6 +11,14 @@ shell out to `raft` can branch on results reliably.
 
 ### Added
 
+- `conversation add <id> --agent <name>`: add a participant to a conversation
+  that already exists. Channels had `channel join`, but a private/group
+  conversation's participant set was frozen at creation — looping in a third
+  agent (e.g. a reviewer) meant recreating the conversation under a new id and
+  losing its thread history. The command is idempotent (`added` is `false` on a
+  repeat) and reports the resulting `participants`; it rejects channels
+  (pointing the caller at `channel join`) and returns `not_found` for a missing
+  conversation. Supports `--json`.
 - `raft --help` (long help) now opens with a TYPICAL AGENT FLOW section
   (claim → me → reply --ack → awaiting → roster → channel list), orienting a
   first-time agent toward the high-level commands instead of the raw subcommand

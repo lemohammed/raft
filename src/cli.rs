@@ -280,6 +280,20 @@ pub(crate) enum ConversationCommand {
     Create(ConversationCreateArgs),
     /// Open (or reuse) a conversation between the given agents.
     Open(ConversationOpenArgs),
+    /// Add a participant to an existing conversation.
+    Add(ConversationAddArgs),
+}
+
+#[derive(Args)]
+pub(crate) struct ConversationAddArgs {
+    /// Conversation to add the agent to.
+    pub(crate) conversation: String,
+    /// Agent to add as a participant.
+    #[arg(long)]
+    pub(crate) agent: String,
+    /// Emit machine-readable JSON instead of text.
+    #[arg(long)]
+    pub(crate) json: bool,
 }
 
 #[derive(Args)]

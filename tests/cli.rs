@@ -2571,3 +2571,74 @@ fn awaiting_closes_each_recipient_independently() {
     assert_eq!(owed_after.len(), 1);
     assert_eq!(owed_after[0]["awaited"], "carol");
 }
+
+#[test]
+fn conversation_add_lets_a_new_participant_join_an_existing_chat() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(&bus, &["claim", "alice", "--workspace", "."]);
+    run(&bus, &["claim", "bob", "--workspace", "."]);
+    run(&bus, &["claim", "carol", "--workspace", "."]);
+    run(
+        &bus,
+        &[
+            "conversation", "create", "proj", "--participants", "alice,bob",
+            "--starter", "alice",
+        ],
+    );
+
+    // Carol cannot send before being added.
+    let blocked = run_fail(
+        &bus,
+        &[
+            "send", "--conversation", "proj", "--from", "carol", "--to", "alice",
+            "--subject", "hi", "--body", "let me in", "--json",
+        ],
+    );
+    let blocked_json: serde_json::Value = serde_json::from_slice(&blocked.stderr).unwrap();
+    assert_eq!(blocked_json["error"]["code"], "not_participant");
+
+    // Adding her reports the new participant set.
+    let added = run(&bus, &["conversation", "add", "proj", "--agent", "carol", "--json"]);
+    let added_json: serde_json::Value = serde_json::from_slice(&added.stdout).unwrap();
+    assert_eq!(added_json["ok"], true);
+    assert_eq!(added_json["added"], true);
+    let participants: Vec<&str> = added_json["participants"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p.as_str().unwrap())
+        .collect();
+    assert!(participants.contains(&"carol"));
+
+    // Re-adding is idempotent: added=false, no duplicate participant.
+    let again = run(&bus, &["conversation", "add", "proj", "--agent", "carol", "--json"]);
+    let again_json: serde_json::Value = serde_json::from_slice(&again.stdout).unwrap();
+    assert_eq!(again_json["added"], false);
+    assert_eq!(again_json["participants"].as_array().unwrap().len(), 3);
+
+    // Now carol can send.
+    run(
+        &bus,
+        &[
+            "send", "--conversation", "proj", "--from", "carol", "--to", "alice",
+            "--subject", "hi", "--body", "thanks",
+        ],
+    );
+
+    // Adding to a channel is rejected; the agent must use `channel join`.
+    run(&bus, &["channel", "create", "room", "--creator", "alice"]);
+    let chan = run_fail(&bus, &["conversation", "add", "room", "--agent", "bob", "--json"]);
+    let chan_json: serde_json::Value = serde_json::from_slice(&chan.stderr).unwrap();
+    assert!(
+        chan_json["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("channel join")
+    );
+
+    // Adding to a missing conversation reports not_found.
+    let missing = run_fail(&bus, &["conversation", "add", "nope", "--agent", "bob", "--json"]);
+    let missing_json: serde_json::Value = serde_json::from_slice(&missing.stderr).unwrap();
+    assert_eq!(missing_json["error"]["code"], "not_found");
+}
