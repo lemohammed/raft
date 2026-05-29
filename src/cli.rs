@@ -214,6 +214,8 @@ pub(crate) struct SendArgs {
     pub(crate) requires_ack: bool,
     #[arg(long = "needs-response-from", default_value = "")]
     pub(crate) needs_response_from: String,
+    #[arg(long)]
+    pub(crate) json: bool,
 }
 
 #[derive(Args)]

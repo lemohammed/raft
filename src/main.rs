@@ -607,7 +607,8 @@ fn cmd_conversation_open(root: &Path, args: ConversationOpenArgs) -> Result<()> 
 
 fn cmd_send(root: &Path, args: SendArgs) -> Result<()> {
     let conversation_id = target_room(args.conversation.as_deref(), args.channel.as_deref())?;
-    let message_id = send_message(
+    let json = args.json;
+    let message = send_message(
         root,
         SendMessageInput {
             conversation_id,
@@ -622,11 +623,25 @@ fn cmd_send(root: &Path, args: SendArgs) -> Result<()> {
             needs_response_from: args.needs_response_from,
         },
     )?;
-    println!("{message_id}");
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "ok": true,
+                "message_id": message.id,
+                "conversation_id": message.conversation_id,
+                "to": message.to,
+                "mentions": message.mentions,
+                "needs_response_from": message.needs_response_from,
+            }))?
+        );
+    } else {
+        println!("{}", message.id);
+    }
     Ok(())
 }
 
-pub(crate) fn send_message(root: &Path, input: SendMessageInput) -> Result<String> {
+pub(crate) fn send_message(root: &Path, input: SendMessageInput) -> Result<Message> {
     let conversation_id = input.conversation_id;
     let sender = validate_id(&input.sender, "sender")?;
     let mut recipients = unique(split_recipients(&input.to)?);
@@ -693,7 +708,7 @@ pub(crate) fn send_message(root: &Path, input: SendMessageInput) -> Result<Strin
         &conv.join("messages").join(format!("{message_id}.json")),
         &message,
     )?;
-    Ok(message_id)
+    Ok(message)
 }
 
 

@@ -60,6 +60,64 @@ fn run_fail(root: &PathBuf, args: &[&str]) -> std::process::Output {
 }
 
 #[test]
+fn send_json_returns_resolved_envelope() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(&bus, &["claim", "codex", "--workspace", "."]);
+    run(&bus, &["claim", "homekeep-dev", "--workspace", "."]);
+    run(
+        &bus,
+        &[
+            "conversation",
+            "create",
+            "sync",
+            "--participants",
+            "codex,homekeep-dev",
+            "--starter",
+            "codex",
+        ],
+    );
+    let sent = run(
+        &bus,
+        &[
+            "send",
+            "--conversation",
+            "sync",
+            "--from",
+            "codex",
+            "--to",
+            "homekeep-dev",
+            "--body",
+            "ping",
+            "--needs-response-from",
+            "homekeep-dev",
+            "--json",
+        ],
+    );
+    let envelope: serde_json::Value = serde_json::from_slice(&sent.stdout).unwrap();
+    assert_eq!(envelope["ok"], serde_json::json!(true));
+    assert!(
+        envelope["message_id"]
+            .as_str()
+            .unwrap()
+            .starts_with("m-"),
+        "message_id should be present and prefixed"
+    );
+    assert_eq!(envelope["conversation_id"], serde_json::json!("sync"));
+    let to: Vec<String> = envelope["to"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|value| value.as_str().unwrap().to_string())
+        .collect();
+    assert!(to.contains(&"homekeep-dev".to_string()));
+    assert_eq!(
+        envelope["needs_response_from"],
+        serde_json::json!(["homekeep-dev"])
+    );
+}
+
+#[test]
 fn private_message_ack_flow() {
     let bus = temp_bus();
     run(&bus, &["init"]);

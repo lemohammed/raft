@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 use std::env;
 use std::path::Path;
 use std::process;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -237,6 +237,28 @@ pub(crate) fn unique_token() -> String {
 }
 
 pub(crate) fn unique_token_short() -> String {
-    let token = unique_token();
-    token.chars().take(12).collect()
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos() as u64;
+    let count = COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("{:08x}{:x}{:x}", nanos as u32, process::id(), count)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    #[test]
+    fn message_ids_are_unique_under_rapid_succession() {
+        let mut ids = HashSet::new();
+        for _ in 0..50_000 {
+            assert!(
+                ids.insert(new_message_id()),
+                "duplicate message id generated within the same process"
+            );
+        }
+    }
 }

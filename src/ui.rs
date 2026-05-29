@@ -216,7 +216,8 @@ fn api_send(root: &Path, body: &[u8]) -> Result<serde_json::Value> {
             requires_ack: request.requires_ack,
             needs_response_from: request.needs_response_from.join(","),
         },
-    )?;
+    )?
+    .id;
     Ok(serde_json::json!({
         "ok": true,
         "message_id": message_id
