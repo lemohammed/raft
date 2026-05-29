@@ -3687,3 +3687,30 @@ fn not_claimed_errors_suggest_nearest_agent_ids() {
     assert_eq!(miss_err["error"]["code"], "not_claimed");
     assert!(miss_err["error"].get("suggestions").is_none());
 }
+
+#[test]
+fn wait_fails_fast_for_an_unclaimed_agent() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(&bus, &["claim", "alice", "--workspace", "."]);
+
+    // An unclaimed waiter would otherwise block for the full --timeout and exit
+    // 2 (timeout). A generous timeout proves the failure is immediate: if the
+    // check regressed the test would observe `timeout`, not `not_claimed`.
+    let unread = run_fail(&bus, &["wait", "alise", "--timeout", "30", "--json"]);
+    let unread_err: serde_json::Value = serde_json::from_slice(&unread.stderr).unwrap();
+    assert_eq!(unread_err["error"]["code"], "not_claimed");
+    assert!(
+        unread_err["error"]["suggestions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s == "alice"),
+        "fast-fail should still carry id suggestions"
+    );
+
+    // The same guard covers the resolution path (`--owed`/`--resolved`).
+    let owed = run_fail(&bus, &["wait", "alise", "--owed", "--timeout", "30", "--json"]);
+    let owed_err: serde_json::Value = serde_json::from_slice(&owed.stderr).unwrap();
+    assert_eq!(owed_err["error"]["code"], "not_claimed");
+}

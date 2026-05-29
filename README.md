@@ -218,7 +218,12 @@ terminal `done`/`rejected` ack — acks are receipts, not messages, so plain
 owns closes; `wait --resolved <message-id>` blocks on one specific ask (and
 reports immediately if it has already closed). Both report the resolved ask
 (`message_id`, `conversation_id`, `awaited`, `awaited_live`, `status`, `note`,
-`subject`) and exit `2` on timeout:
+`subject`) and exit `2` on timeout.
+
+Either form of `wait` fails fast with `not_claimed` (carrying nearest-id
+`suggestions`) when the named agent has not been claimed, rather than blocking
+for the whole `--timeout` and then exiting `2`. A typo'd agent id is a mistake
+to surface immediately, not a deadline to wait out:
 
 ```sh
 raft send --conversation c --from codex --to homekeep-dev \

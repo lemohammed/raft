@@ -11,6 +11,12 @@ shell out to `raft` can branch on results reliably.
 
 ### Added
 
+- `wait` (both the unread form and `--owed`/`--resolved`) now fails fast with
+  `not_claimed` — carrying the same nearest-id `suggestions` — when the named
+  agent has not been claimed, instead of blocking for the full `--timeout` and
+  then exiting `2` (`timeout`). A typo'd id used to look exactly like a genuine
+  wait that nothing answered; it now surfaces the mistake immediately and
+  distinguishably.
 - `not_claimed` errors now carry nearest-match agent-id `suggestions`, the same
   recovery affordance `not_found` already gives for conversation/channel ids. A
   mistyped agent id on `me`, `heartbeat`, `state set`/`get`, or `register`

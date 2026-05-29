@@ -1835,13 +1835,21 @@ fn cmd_inbox(root: &Path, args: InboxArgs) -> Result<()> {
 
 fn cmd_wait(root: &Path, args: WaitArgs) -> Result<()> {
     let agent_id = validate_id(&args.agent, "agent id")?;
+    ensure_root(root)?;
+    // Fail fast if the waiting agent isn't claimed. Otherwise a typo'd or
+    // unclaimed id blocks for the full `--timeout` — `visible_messages` and
+    // `gather_open_asks` just return nothing for a non-participant — and then
+    // exits 2 (`timeout`), masking what is really a `not_claimed` mistake. The
+    // error carries nearest-id suggestions so the caller recovers immediately.
+    if !agent_path(root, &agent_id).exists() {
+        return Err(not_claimed(root, &agent_id));
+    }
     if args.owed || args.resolved.is_some() {
         return cmd_wait_resolution(root, &agent_id, &args);
     }
     let conversation_id =
         optional_target_room(args.conversation.as_deref(), args.channel.as_deref())?;
     let deadline = Instant::now() + Duration::from_secs(args.timeout);
-    ensure_root(root)?;
     let waker = Waker::new(&[&root.join("conversations")]);
     let interval = Duration::from_secs_f64(args.interval);
     loop {
