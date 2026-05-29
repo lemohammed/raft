@@ -992,7 +992,17 @@ fn cmd_reply(root: &Path, args: ReplyArgs) -> Result<()> {
         .transpose()?;
     let to = args.to.unwrap_or_else(|| parent.from.clone());
     let subject = args.subject.unwrap_or_else(|| parent.subject.clone());
-    let message = send_message(
+    // Hold the conversation lock across both the reply send and the optional
+    // ack receipt so `reply --ack` is atomic: a lock failure aborts before
+    // anything is written (no half-sent reply that a retry would duplicate),
+    // and no other writer can interleave between the two writes.
+    let _lock = DirLock::acquire(
+        root,
+        &format!("conversation-{}", parent.conversation_id),
+        LOCK_TTL_SECONDS,
+        LOCK_TIMEOUT_SECONDS,
+    )?;
+    let message = send_message_locked(
         root,
         SendMessageInput {
             conversation_id: parent.conversation_id.clone(),
@@ -1008,12 +1018,6 @@ fn cmd_reply(root: &Path, args: ReplyArgs) -> Result<()> {
         },
     )?;
     if let Some(status) = &ack_status {
-        let _lock = DirLock::acquire(
-            root,
-            &format!("conversation-{}", parent.conversation_id),
-            LOCK_TTL_SECONDS,
-            LOCK_TIMEOUT_SECONDS,
-        )?;
         write_receipt(root, &sender, &parent, status, args.ack_note)?;
     }
     if json {
@@ -1037,6 +1041,21 @@ fn cmd_reply(root: &Path, args: ReplyArgs) -> Result<()> {
 }
 
 pub(crate) fn send_message(root: &Path, input: SendMessageInput) -> Result<Message> {
+    ensure_root(root)?;
+    let _lock = DirLock::acquire(
+        root,
+        &format!("conversation-{}", input.conversation_id),
+        LOCK_TTL_SECONDS,
+        LOCK_TIMEOUT_SECONDS,
+    )?;
+    send_message_locked(root, input)
+}
+
+/// Send a message assuming the caller already holds the conversation lock. This
+/// lets `reply --ack` perform its reply-send and its ack-receipt under a single
+/// lock: a lock-acquisition failure aborts before anything is written (no
+/// half-sent reply), and no other writer can interleave between the two writes.
+pub(crate) fn send_message_locked(root: &Path, input: SendMessageInput) -> Result<Message> {
     let conversation_id = input.conversation_id;
     let sender = validate_id(&input.sender, "sender")?;
     let mut recipients = unique(split_recipients(&input.to)?);
@@ -1048,13 +1067,6 @@ pub(crate) fn send_message(root: &Path, input: SendMessageInput) -> Result<Messa
             validate_id(recipient, "recipient")?;
         }
     }
-    ensure_root(root)?;
-    let _lock = DirLock::acquire(
-        root,
-        &format!("conversation-{conversation_id}"),
-        LOCK_TTL_SECONDS,
-        LOCK_TIMEOUT_SECONDS,
-    )?;
     let (conv, meta) = load_conversation(root, &conversation_id)?;
     ensure_participant(&meta, &sender)?;
     let mentions = mentioned_participants(&meta, &input.subject, &input.body);

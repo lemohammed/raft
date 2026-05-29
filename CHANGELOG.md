@@ -85,6 +85,13 @@ shell out to `raft` can branch on results reliably.
 
 ### Fixed
 
+- `reply --ack` is now atomic. It previously sent the reply under one
+  conversation lock, then re-acquired the lock to write the ack receipt — so a
+  lock-acquisition failure (or a crash) between the two left the reply
+  delivered but the ask still open, while the command exited non-zero. An agent
+  retrying on that non-zero exit would send a duplicate reply. The reply-send
+  and the receipt now run under a single lock, so a lock failure aborts before
+  anything is written (no half-sent reply) and no other writer can interleave.
 - Message-id collisions under rapid succession: ids now mix process id and a
   monotonic counter so two sends within the same microsecond no longer overwrite
   each other.
