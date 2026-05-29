@@ -410,7 +410,8 @@ fn cmd_heartbeat_watch(
         && existing.pid != process::id()
         && process_is_alive(existing.pid)
     {
-        bail!(
+        bail_code!(
+            "conflict",
             "heartbeat watcher for @{agent_id} already appears active with pid {}",
             existing.pid
         );
@@ -1536,7 +1537,8 @@ fn cmd_thread(root: &Path, args: ThreadArgs) -> Result<()> {
     ensure_root(root)?;
     let (_, root_message) = find_message(root, &args.message_id)?;
     if !message_visible_to(&root_message, &agent_id) {
-        bail!(
+        bail_code!(
+            "not_participant",
             "message {:?} is not visible to {agent_id:?}",
             root_message.id
         );

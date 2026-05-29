@@ -381,6 +381,24 @@ fn error_codes_are_stable_for_common_failures() {
     );
     let outsider_json: serde_json::Value = serde_json::from_slice(&outsider.stderr).unwrap();
     assert_eq!(outsider_json["error"]["code"], serde_json::json!("not_participant"));
+
+    // A participant who cannot see a message (it was not addressed to them) gets
+    // not_participant from `thread`, matching read/ack/show visibility checks.
+    run(&bus, &["claim", "dave", "--workspace", "."]);
+    run(
+        &bus,
+        &[
+            "conversation", "create", "trio", "--participants", "alice,bob,dave", "--starter", "alice",
+        ],
+    );
+    let sent = run(
+        &bus,
+        &["send", "--conversation", "trio", "--from", "alice", "--to", "bob", "--subject", "s", "--body", "hidden from dave"],
+    );
+    let mid = String::from_utf8_lossy(&sent.stdout).trim().to_string();
+    let hidden = run_fail(&bus, &["thread", &mid, "--agent", "dave", "--json"]);
+    let hidden_json: serde_json::Value = serde_json::from_slice(&hidden.stderr).unwrap();
+    assert_eq!(hidden_json["error"]["code"], serde_json::json!("not_participant"));
 }
 
 #[test]
