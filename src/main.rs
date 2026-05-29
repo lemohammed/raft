@@ -77,9 +77,22 @@ fn fail(err: RaftError, json: bool) -> ! {
 /// error path can match the success path's output format.
 fn command_wants_json(command: &Commands) -> bool {
     match command {
-        Commands::State {
-            command: StateCommand::Get(args),
-        } => args.json,
+        Commands::Init(args) => args.json,
+        Commands::Claim(args) => args.json,
+        Commands::Register(args) => args.json,
+        Commands::Heartbeat(args) => args.json,
+        Commands::State { command } => match command {
+            StateCommand::Set(args) => args.json,
+            StateCommand::Get(args) => args.json,
+        },
+        Commands::Channel { command } => match command {
+            ChannelCommand::Create(args) => args.json,
+            ChannelCommand::Join(args) => args.json,
+        },
+        Commands::Conversation { command } => match command {
+            ConversationCommand::Create(args) => args.json,
+            ConversationCommand::Open(args) => args.json,
+        },
         Commands::Send(args) => args.json,
         Commands::Awaiting(args) => args.json,
         Commands::Roster(args) => args.json,
@@ -90,7 +103,9 @@ fn command_wants_json(command: &Commands) -> bool {
         Commands::Search(args) => args.json,
         Commands::Thread(args) => args.json,
         Commands::Read(args) => args.json,
+        Commands::Ack(args) => args.json,
         Commands::Receipts(args) => args.json,
+        Commands::Journal(args) => args.json,
         Commands::Status(args) => args.json,
         Commands::Doctor(args) => args.json,
         _ => false,
@@ -99,7 +114,7 @@ fn command_wants_json(command: &Commands) -> bool {
 
 fn run(root: PathBuf, command: Commands) -> Result<()> {
     match command {
-        Commands::Init => cmd_init(&root),
+        Commands::Init(args) => cmd_init(&root, args),
         Commands::Claim(args) => cmd_claim(&root, args),
         Commands::Register(args) => cmd_register(&root, args),
         Commands::Heartbeat(args) => cmd_heartbeat(&root, args),
@@ -146,9 +161,29 @@ fn root_path(root: Option<PathBuf>) -> Result<PathBuf> {
     Ok(env::current_dir()?.join("run").join("bus"))
 }
 
-fn cmd_init(root: &Path) -> Result<()> {
+fn cmd_init(root: &Path, args: InitArgs) -> Result<()> {
     ensure_root(root)?;
-    println!("initialized raft bus at {}", root.display());
+    if args.json {
+        emit_ok(serde_json::json!({ "root": root.display().to_string() }))?;
+    } else {
+        println!("initialized raft bus at {}", root.display());
+    }
+    Ok(())
+}
+
+/// Print a success envelope `{"ok":true, ...fields}` as pretty JSON. Mirrors the
+/// failure envelope emitted by `fail` so agents see a consistent `ok` discriminant
+/// on both paths.
+fn emit_ok(fields: serde_json::Value) -> Result<()> {
+    let mut map = serde_json::Map::new();
+    map.insert("ok".to_string(), serde_json::Value::Bool(true));
+    if let serde_json::Value::Object(extra) = fields {
+        map.extend(extra);
+    }
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::Value::Object(map))?
+    );
     Ok(())
 }
 
@@ -213,7 +248,16 @@ fn cmd_claim(root: &Path, args: ClaimArgs) -> Result<()> {
         state_updated_at: iso_now(),
     };
     atomic_write_json(&path, &payload)?;
-    println!("claimed @{agent_id} at {}", root.display());
+    if args.json {
+        emit_ok(serde_json::json!({
+            "agent": agent_id,
+            "mention": payload.mention,
+            "expires_at": payload.expires_at,
+            "root": root.display().to_string(),
+        }))?;
+    } else {
+        println!("claimed @{agent_id} at {}", root.display());
+    }
     Ok(())
 }
 
@@ -262,7 +306,16 @@ fn cmd_register(root: &Path, args: RegisterArgs) -> Result<()> {
         state_updated_at: previous.state_updated_at,
     };
     atomic_write_json(&agent_path(root, &agent_id), &payload)?;
-    println!("registered {agent_id} at {}", root.display());
+    if args.json {
+        emit_ok(serde_json::json!({
+            "agent": agent_id,
+            "mention": payload.mention,
+            "expires_at": payload.expires_at,
+            "root": root.display().to_string(),
+        }))?;
+    } else {
+        println!("registered {agent_id} at {}", root.display());
+    }
     Ok(())
 }
 
@@ -272,7 +325,14 @@ fn cmd_heartbeat(root: &Path, args: HeartbeatArgs) -> Result<()> {
     if args.watch {
         return cmd_heartbeat_watch(root, &agent_id, args.ttl, args.interval);
     }
-    heartbeat_once(root, &agent_id, args.ttl, true)?;
+    let agent = heartbeat_once(root, &agent_id, args.ttl, !args.json)?;
+    if args.json {
+        emit_ok(serde_json::json!({
+            "agent": agent.id,
+            "last_seen_at": agent.last_seen_at,
+            "expires_at": agent.expires_at,
+        }))?;
+    }
     Ok(())
 }
 
@@ -426,7 +486,16 @@ fn cmd_state_set(root: &Path, args: StateSetArgs) -> Result<()> {
     if changed {
         write_state_change_messages(root, &agent_id, &state, args.note.as_deref())?;
     }
-    println!("@{agent_id} {state}");
+    if args.json {
+        emit_ok(serde_json::json!({
+            "agent": agent_id,
+            "state": state,
+            "note": args.note,
+            "changed": changed,
+        }))?;
+    } else {
+        println!("@{agent_id} {state}");
+    }
     Ok(())
 }
 
@@ -486,7 +555,16 @@ fn cmd_channel_create(root: &Path, args: ChannelCreateArgs) -> Result<()> {
             if !meta.channel {
                 bail!("{channel_id:?} already exists but is not a channel");
             }
-            println!("channel {channel_id} ready; root={}", root.display());
+            if args.json {
+                emit_ok(serde_json::json!({
+                    "channel": channel_id,
+                    "created": false,
+                    "participants": meta.participants,
+                    "root": root.display().to_string(),
+                }))?;
+            } else {
+                println!("channel {channel_id} ready; root={}", root.display());
+            }
             return Ok(());
         }
         bail!("channel {channel_id:?} already exists");
@@ -524,7 +602,16 @@ fn cmd_channel_create(root: &Path, args: ChannelCreateArgs) -> Result<()> {
         ),
         "channel opened",
     )?;
-    println!("channel {channel_id} ready; root={}", root.display());
+    if args.json {
+        emit_ok(serde_json::json!({
+            "channel": channel_id,
+            "created": true,
+            "participants": meta.participants,
+            "root": root.display().to_string(),
+        }))?;
+    } else {
+        println!("channel {channel_id} ready; root={}", root.display());
+    }
     Ok(())
 }
 
@@ -546,11 +633,11 @@ fn cmd_channel_join(root: &Path, args: ChannelJoinArgs) -> Result<()> {
     if !meta.channel {
         bail!("{channel_id:?} is not a channel");
     }
-    if !meta
+    let already_member = meta
         .participants
         .iter()
-        .any(|participant| participant == &agent_id)
-    {
+        .any(|participant| participant == &agent_id);
+    if !already_member {
         meta.participants.push(agent_id.clone());
         meta.updated_at = iso_now();
         atomic_write_json(&conv.join("meta.json"), &meta)?;
@@ -562,7 +649,16 @@ fn cmd_channel_join(root: &Path, args: ChannelJoinArgs) -> Result<()> {
             "channel joined",
         )?;
     }
-    println!("@{agent_id} subscribed to channel {channel_id}");
+    if args.json {
+        emit_ok(serde_json::json!({
+            "channel": channel_id,
+            "agent": agent_id,
+            "joined": !already_member,
+            "participants": meta.participants,
+        }))?;
+    } else {
+        println!("@{agent_id} subscribed to channel {channel_id}");
+    }
     Ok(())
 }
 
@@ -594,10 +690,25 @@ fn cmd_conversation_create(root: &Path, args: ConversationCreateArgs) -> Result<
     if conv.join("meta.json").exists() {
         if args.if_missing {
             migrate_conversation_records(&conv)?;
-            println!(
-                "conversation {conversation_id} ready; root={}",
-                root.display()
-            );
+            if args.json {
+                let meta: Meta = read_json(&conv.join("meta.json"))?.ok_or_else(|| {
+                    RaftError::coded(
+                        "not_found",
+                        format!("conversation {conversation_id:?} has no metadata"),
+                    )
+                })?;
+                emit_ok(serde_json::json!({
+                    "conversation_id": conversation_id,
+                    "created": false,
+                    "participants": meta.participants,
+                    "root": root.display().to_string(),
+                }))?;
+            } else {
+                println!(
+                    "conversation {conversation_id} ready; root={}",
+                    root.display()
+                );
+            }
             return Ok(());
         }
         bail!("conversation {conversation_id:?} already exists");
@@ -635,10 +746,19 @@ fn cmd_conversation_create(root: &Path, args: ConversationCreateArgs) -> Result<
         ),
         "conversation opened",
     )?;
-    println!(
-        "conversation {conversation_id} ready; root={}",
-        root.display()
-    );
+    if args.json {
+        emit_ok(serde_json::json!({
+            "conversation_id": conversation_id,
+            "created": true,
+            "participants": meta.participants,
+            "root": root.display().to_string(),
+        }))?;
+    } else {
+        println!(
+            "conversation {conversation_id} ready; root={}",
+            root.display()
+        );
+    }
     Ok(())
 }
 
@@ -667,6 +787,7 @@ fn cmd_conversation_open(root: &Path, args: ConversationOpenArgs) -> Result<()> 
             rate_window: args.rate_window,
             rate_max: args.rate_max,
             max_message_bytes: args.max_message_bytes,
+            json: args.json,
         },
     )
 }
@@ -1308,7 +1429,15 @@ fn cmd_ack(root: &Path, args: AckArgs) -> Result<()> {
         LOCK_TIMEOUT_SECONDS,
     )?;
     write_receipt(root, &agent_id, &message, &args.status, args.note)?;
-    println!("{} {}", args.status, args.message_id);
+    if args.json {
+        emit_ok(serde_json::json!({
+            "message_id": args.message_id,
+            "agent": agent_id,
+            "status": args.status,
+        }))?;
+    } else {
+        println!("{} {}", args.status, args.message_id);
+    }
     Ok(())
 }
 
@@ -1392,7 +1521,15 @@ fn cmd_journal(root: &Path, args: JournalArgs) -> Result<()> {
         &root.join("journal").join(format!("{agent_id}.jsonl")),
         &entry,
     )?;
-    println!("{}", entry.id);
+    if args.json {
+        emit_ok(serde_json::json!({
+            "entry_id": entry.id,
+            "agent": agent_id,
+            "kind": entry.kind,
+        }))?;
+    } else {
+        println!("{}", entry.id);
+    }
     Ok(())
 }
 

@@ -118,6 +118,123 @@ fn send_json_returns_resolved_envelope() {
 }
 
 #[test]
+fn mutating_commands_emit_ok_envelopes() {
+    let bus = temp_bus();
+
+    let init: serde_json::Value =
+        serde_json::from_slice(&run(&bus, &["init", "--json"]).stdout).unwrap();
+    assert_eq!(init["ok"], serde_json::json!(true));
+
+    let claim: serde_json::Value =
+        serde_json::from_slice(&run(&bus, &["claim", "codex", "--json"]).stdout).unwrap();
+    assert_eq!(claim["ok"], serde_json::json!(true));
+    assert_eq!(claim["agent"], serde_json::json!("codex"));
+    assert_eq!(claim["mention"], serde_json::json!("@codex"));
+
+    run(&bus, &["claim", "homekeep-dev"]);
+
+    // conversation open --json must return the resolved conversation id.
+    let opened: serde_json::Value = serde_json::from_slice(
+        &run(
+            &bus,
+            &[
+                "conversation",
+                "open",
+                "--from",
+                "codex",
+                "--to",
+                "homekeep-dev",
+                "--json",
+            ],
+        )
+        .stdout,
+    )
+    .unwrap();
+    assert_eq!(opened["ok"], serde_json::json!(true));
+    assert_eq!(opened["created"], serde_json::json!(true));
+    let conversation_id = opened["conversation_id"].as_str().unwrap().to_string();
+    assert!(!conversation_id.is_empty());
+
+    // `conversation create` with an explicit id is the idempotent path:
+    // creating the same id again with --if-missing reports created=false.
+    let created: serde_json::Value = serde_json::from_slice(
+        &run(
+            &bus,
+            &[
+                "conversation",
+                "create",
+                "proj",
+                "--participants",
+                "codex,homekeep-dev",
+                "--json",
+            ],
+        )
+        .stdout,
+    )
+    .unwrap();
+    assert_eq!(created["created"], serde_json::json!(true));
+    assert_eq!(created["conversation_id"], serde_json::json!("proj"));
+
+    let recreated: serde_json::Value = serde_json::from_slice(
+        &run(
+            &bus,
+            &[
+                "conversation",
+                "create",
+                "proj",
+                "--participants",
+                "codex,homekeep-dev",
+                "--if-missing",
+                "--json",
+            ],
+        )
+        .stdout,
+    )
+    .unwrap();
+    assert_eq!(recreated["created"], serde_json::json!(false));
+    assert_eq!(recreated["conversation_id"], serde_json::json!("proj"));
+
+    let state: serde_json::Value = serde_json::from_slice(
+        &run(
+            &bus,
+            &["state", "set", "codex", "working", "--note", "busy", "--json"],
+        )
+        .stdout,
+    )
+    .unwrap();
+    assert_eq!(state["changed"], serde_json::json!(true));
+    assert_eq!(state["state"], serde_json::json!("working"));
+
+    let sent = run(
+        &bus,
+        &[
+            "send",
+            "--conversation",
+            &conversation_id,
+            "--from",
+            "codex",
+            "--to",
+            "homekeep-dev",
+            "--body",
+            "hi",
+        ],
+    );
+    let message_id = String::from_utf8(sent.stdout).unwrap().trim().to_string();
+
+    let ack: serde_json::Value = serde_json::from_slice(
+        &run(
+            &bus,
+            &["ack", "homekeep-dev", &message_id, "--status", "done", "--json"],
+        )
+        .stdout,
+    )
+    .unwrap();
+    assert_eq!(ack["ok"], serde_json::json!(true));
+    assert_eq!(ack["status"], serde_json::json!("done"));
+    assert_eq!(ack["message_id"], serde_json::json!(message_id));
+}
+
+#[test]
 fn private_message_ack_flow() {
     let bus = temp_bus();
     run(&bus, &["init"]);

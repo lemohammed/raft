@@ -19,6 +19,12 @@ shell out to `raft` can branch on results reliably.
   with the `timeout` code when its deadline passes with no unread message.
 - `send --json` emits a resolved envelope (`message_id`, `conversation_id`,
   `to`, `mentions`, `needs_response_from`) instead of a bare id.
+- `--json` on the remaining mutating commands (`init`, `claim`, `register`,
+  `heartbeat`, `state set`, `channel create`/`join`, `conversation create`/
+  `open`, `ack`, `journal`), each emitting an `{"ok":true, ...}` envelope.
+  `conversation open --json` returns the resolved `conversation_id`;
+  create/join report a `created`/`joined` boolean so callers can tell a
+  fresh creation from an `--if-missing` no-op.
 - Exit/error codes and the JSON output contract are documented in `raft --help`
   (long help) and the README.
 

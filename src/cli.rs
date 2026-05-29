@@ -46,7 +46,7 @@ pub(crate) struct Cli {
 #[derive(Subcommand)]
 pub(crate) enum Commands {
     /// Initialize a new bus directory at the resolved root.
-    Init,
+    Init(InitArgs),
     /// Claim an agent name, taking ownership and starting its heartbeat TTL.
     Claim(ClaimArgs),
     /// Register an agent name without claiming exclusive ownership.
@@ -107,6 +107,13 @@ pub(crate) enum Commands {
 }
 
 #[derive(Args)]
+pub(crate) struct InitArgs {
+    /// Emit machine-readable JSON instead of text.
+    #[arg(long)]
+    pub(crate) json: bool,
+}
+
+#[derive(Args)]
 pub(crate) struct ClaimArgs {
     /// Agent name to claim.
     pub(crate) agent: String,
@@ -119,6 +126,9 @@ pub(crate) struct ClaimArgs {
     /// Seconds before the agent is considered stale without a heartbeat.
     #[arg(long, default_value_t = DEFAULT_AGENT_TTL_SECONDS)]
     pub(crate) ttl: u64,
+    /// Emit machine-readable JSON instead of text.
+    #[arg(long)]
+    pub(crate) json: bool,
 }
 
 #[derive(Args)]
@@ -134,6 +144,9 @@ pub(crate) struct RegisterArgs {
     /// Seconds before the agent is considered stale without a heartbeat.
     #[arg(long, default_value_t = DEFAULT_AGENT_TTL_SECONDS)]
     pub(crate) ttl: u64,
+    /// Emit machine-readable JSON instead of text.
+    #[arg(long)]
+    pub(crate) json: bool,
 }
 
 #[derive(Args)]
@@ -149,6 +162,9 @@ pub(crate) struct HeartbeatArgs {
     /// Seconds between heartbeats when --watch is set.
     #[arg(long)]
     pub(crate) interval: Option<f64>,
+    /// Emit machine-readable JSON instead of text.
+    #[arg(long)]
+    pub(crate) json: bool,
 }
 
 #[derive(Subcommand)]
@@ -168,6 +184,9 @@ pub(crate) struct StateSetArgs {
     /// Optional human-readable note attached to the state.
     #[arg(long)]
     pub(crate) note: Option<String>,
+    /// Emit machine-readable JSON instead of text.
+    #[arg(long)]
+    pub(crate) json: bool,
 }
 
 #[derive(Args)]
@@ -212,6 +231,9 @@ pub(crate) struct ChannelCreateArgs {
     /// Maximum message body size in bytes.
     #[arg(long = "max-message-bytes", default_value_t = DEFAULT_MAX_MESSAGE_BYTES)]
     pub(crate) max_message_bytes: usize,
+    /// Emit machine-readable JSON instead of text.
+    #[arg(long)]
+    pub(crate) json: bool,
 }
 
 #[derive(Args)]
@@ -221,6 +243,9 @@ pub(crate) struct ChannelJoinArgs {
     /// Agent joining the channel.
     #[arg(long)]
     pub(crate) agent: String,
+    /// Emit machine-readable JSON instead of text.
+    #[arg(long)]
+    pub(crate) json: bool,
 }
 
 #[derive(Subcommand)]
@@ -259,6 +284,9 @@ pub(crate) struct ConversationCreateArgs {
     /// Maximum message body size in bytes.
     #[arg(long = "max-message-bytes", default_value_t = DEFAULT_MAX_MESSAGE_BYTES)]
     pub(crate) max_message_bytes: usize,
+    /// Emit machine-readable JSON instead of text.
+    #[arg(long)]
+    pub(crate) json: bool,
 }
 
 #[derive(Args)]
@@ -290,6 +318,9 @@ pub(crate) struct ConversationOpenArgs {
     /// Maximum message body size in bytes.
     #[arg(long = "max-message-bytes", default_value_t = DEFAULT_MAX_MESSAGE_BYTES)]
     pub(crate) max_message_bytes: usize,
+    /// Emit machine-readable JSON instead of text.
+    #[arg(long)]
+    pub(crate) json: bool,
 }
 
 #[derive(Args)]
@@ -517,6 +548,9 @@ pub(crate) struct AckArgs {
     /// Optional note attached to the acknowledgement.
     #[arg(long)]
     pub(crate) note: Option<String>,
+    /// Emit machine-readable JSON instead of text.
+    #[arg(long)]
+    pub(crate) json: bool,
 }
 
 #[derive(Args)]
@@ -541,6 +575,9 @@ pub(crate) struct JournalArgs {
     /// Entry body.
     #[arg(long)]
     pub(crate) body: String,
+    /// Emit machine-readable JSON instead of text.
+    #[arg(long)]
+    pub(crate) json: bool,
 }
 
 #[derive(Args)]
