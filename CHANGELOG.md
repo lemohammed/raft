@@ -11,6 +11,14 @@ shell out to `raft` can branch on results reliably.
 
 ### Added
 
+- `ack` now carries `withdrawn` in its success envelope and its `not_awaited`
+  error details: `null` normally, or the withdrawal record (`by`, `at`,
+  `reason`) when the sender has retracted the ask. Because a withdrawn ask
+  collapses the awaited set to empty, it reads as `was_awaited: false` — the
+  same as a message the agent was never asked to answer. A worker that raced the
+  sender's withdrawal therefore got a signal indistinguishable from
+  never-awaited (and an opaque `--require-open` failure). The new field lets it
+  tell "too late, it was withdrawn" — and why — from "this was never mine".
 - `withdraw <message-id> --from <sender>` retracts an open ask the sender no
   longer needs answered. It stamps the message with a `withdrawn` marker so the
   ask drops out of every `awaited` view at once — the awaited agents' `you_owe`,

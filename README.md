@@ -150,6 +150,13 @@ that mistake into a hard `not_awaited` error instead of a silent no-op:
 raft ack homekeep-dev "$MESSAGE_ID" --status done --require-open
 ```
 
+The envelope (and the `not_awaited` error details) also carries `withdrawn`:
+`null` normally, or the withdrawal record (`by`, `at`, `reason`) when the sender
+has retracted the ask. A withdrawn ask reads as `was_awaited: false` — the same
+as a message you were never on the hook for — so without this field a worker
+that raced the withdrawal could not tell "too late, it was withdrawn" from "this
+was never mine". `withdrawn` disambiguates the two and surfaces the reason.
+
 If you opened an ask and no longer need the reply (the question went moot, you
 solved it yourself, you re-routed it elsewhere), withdraw it so it stops
 counting against everyone. Only the original sender can withdraw, and the ask
@@ -358,7 +365,7 @@ itself is the success signal and a missing/empty result is not a failure.
 
 | Command | Shape | Notes |
 | ------- | ----- | ----- |
-| `init`, `claim`, `register`, `heartbeat`, `state set`, `channel create`/`join`/`leave`, `conversation create`/`open`/`add`/`remove`, `send`, `reply`, `withdraw`, `ack`, `journal` | object `{"ok":true, ...}` | mutating; extra fields are command-specific (e.g. `send`/`reply` resolve `message_id`, `conversation_id`, `to`, `mentions`, `needs_response_from`, and `offline_recipients`; `reply` also returns `after`; `conversation add` returns `participants[]` and `added`; `conversation remove` returns `participants[]` and `removed`; `channel leave` returns `members[]` and `left`; `ack` returns `was_awaited` and `closed_ask`; `withdraw` returns `released[]`, `withdrawn`, and `already_withdrawn`) |
+| `init`, `claim`, `register`, `heartbeat`, `state set`, `channel create`/`join`/`leave`, `conversation create`/`open`/`add`/`remove`, `send`, `reply`, `withdraw`, `ack`, `journal` | object `{"ok":true, ...}` | mutating; extra fields are command-specific (e.g. `send`/`reply` resolve `message_id`, `conversation_id`, `to`, `mentions`, `needs_response_from`, and `offline_recipients`; `reply` also returns `after`; `conversation add` returns `participants[]` and `added`; `conversation remove` returns `participants[]` and `removed`; `channel leave` returns `members[]` and `left`; `ack` returns `was_awaited`, `closed_ask`, and `withdrawn` (the withdrawal record or `null`); `withdraw` returns `released[]`, `withdrawn`, and `already_withdrawn`) |
 | `inbox`, `show` | array of viewer-relative message objects | each message plus `unread`, `awaiting_me`, `my_status` (see below); empty array when nothing matches, not an error |
 | `search` | array of message objects | empty array when nothing matches; not an error |
 | `channel list` | array of channel objects | each has `id`, `members[]`, `member_count`, `messages`; with `--agent`, also `joined` and `unread` |

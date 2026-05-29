@@ -3557,3 +3557,75 @@ fn withdraw_rejects_a_message_that_is_not_an_open_ask() {
     let denied_json: serde_json::Value = serde_json::from_slice(&denied.stderr).unwrap();
     assert_eq!(denied_json["error"]["code"], "not_found");
 }
+
+#[test]
+fn ack_of_a_withdrawn_ask_is_distinguishable_from_never_awaited() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(&bus, &["claim", "alice", "--workspace", "."]);
+    run(&bus, &["claim", "bob", "--workspace", "."]);
+    run(
+        &bus,
+        &[
+            "conversation", "create", "c", "--participants", "alice,bob",
+            "--starter", "alice",
+        ],
+    );
+    let sent = run(
+        &bus,
+        &[
+            "send", "--conversation", "c", "--from", "alice", "--to", "bob",
+            "--subject", "Q", "--body", "ship it", "--needs-response-from", "bob",
+        ],
+    );
+    let message_id = String::from_utf8_lossy(&sent.stdout).trim().to_string();
+    run(
+        &bus,
+        &["withdraw", &message_id, "--from", "alice", "--reason", "moot", "--json"],
+    );
+
+    // Bob raced the withdrawal and acks anyway. The envelope must carry the
+    // withdrawal so bob can tell "too late, withdrawn" (and why) from a message
+    // it was never on the hook for.
+    let acked = run(
+        &bus,
+        &["ack", "bob", &message_id, "--status", "done", "--json"],
+    );
+    let acked_json: serde_json::Value = serde_json::from_slice(&acked.stdout).unwrap();
+    assert_eq!(acked_json["was_awaited"], false);
+    assert_eq!(acked_json["closed_ask"], false);
+    assert_eq!(acked_json["withdrawn"]["by"], "alice");
+    assert_eq!(acked_json["withdrawn"]["reason"], "moot");
+
+    // Text mode flags it inline.
+    let text = run(&bus, &["ack", "bob", &message_id, "--status", "done"]);
+    assert!(
+        String::from_utf8_lossy(&text.stdout).contains("(ask withdrawn)"),
+        "text ack should mark the withdrawn ask"
+    );
+
+    // `--require-open` still fails (no open ask), but the error details now name
+    // the withdrawal rather than looking identical to never-awaited.
+    let strict = run_fail(
+        &bus,
+        &["ack", "bob", &message_id, "--status", "done", "--require-open", "--json"],
+    );
+    let strict_json: serde_json::Value = serde_json::from_slice(&strict.stderr).unwrap();
+    assert_eq!(strict_json["error"]["code"], "not_awaited");
+    assert_eq!(strict_json["error"]["withdrawn"]["by"], "alice");
+
+    // A message bob was genuinely never awaited on carries no withdrawal,
+    // distinguishing the two cases.
+    let fyi = run(
+        &bus,
+        &[
+            "send", "--conversation", "c", "--from", "alice", "--to", "bob",
+            "--subject", "FYI", "--body", "no reply needed",
+        ],
+    );
+    let fyi_id = String::from_utf8_lossy(&fyi.stdout).trim().to_string();
+    let fyi_ack = run(&bus, &["ack", "bob", &fyi_id, "--status", "done", "--json"]);
+    let fyi_json: serde_json::Value = serde_json::from_slice(&fyi_ack.stdout).unwrap();
+    assert_eq!(fyi_json["was_awaited"], false);
+    assert!(fyi_json["withdrawn"].is_null());
+}

@@ -2301,6 +2301,11 @@ fn cmd_ack(root: &Path, args: AckArgs) -> Result<()> {
         .map(|receipt| ask_is_terminal(&receipt.status))
         .unwrap_or(false);
     let closed_ask = ask_is_terminal(&status) && was_awaited && !already_terminal;
+    // A withdrawn ask collapses `awaited` to empty, so `was_awaited` reads false
+    // — indistinguishable from "you were never asked". Surface the withdrawal so
+    // a worker that raced the sender's withdrawal can tell "too late, it was
+    // withdrawn" (and why) from "this was never my obligation".
+    let withdrawn = message.withdrawn.clone();
 
     if args.require_open && !closed_ask {
         return Err(RaftError::coded(
@@ -2314,6 +2319,7 @@ fn cmd_ack(root: &Path, args: AckArgs) -> Result<()> {
             "message_id": message.id,
             "awaited": awaited,
             "was_awaited": was_awaited,
+            "withdrawn": withdrawn,
         })));
     }
 
@@ -2325,9 +2331,16 @@ fn cmd_ack(root: &Path, args: AckArgs) -> Result<()> {
             "status": status,
             "was_awaited": was_awaited,
             "closed_ask": closed_ask,
+            "withdrawn": withdrawn,
         }))?;
     } else {
-        let suffix = if closed_ask { " (closed ask)" } else { "" };
+        let suffix = if withdrawn.is_some() {
+            " (ask withdrawn)"
+        } else if closed_ask {
+            " (closed ask)"
+        } else {
+            ""
+        };
         println!("{} {}{}", status, args.message_id, suffix);
     }
     Ok(())
