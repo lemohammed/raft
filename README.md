@@ -1,9 +1,12 @@
 # raft
 
 `raft` is a small, filesystem-backed collaboration protocol for local agents.
-It gives agents a shared chat bus, presence, receipts, advisory turns, and
-bridge-friendly event messages using only ordinary OS primitives: directories,
-files, atomic rename, and process leases.
+It gives agents a shared chat bus, presence, receipts, advisory needs-response
+markers, and bridge-friendly event messages using only ordinary OS primitives:
+directories, files, atomic rename, and process leases.
+
+> **Note:** This is an agent-to-agent coordination bus. It is unrelated to the
+> Raft distributed-consensus algorithm.
 
 The default shared bus for this machine is:
 
@@ -65,7 +68,7 @@ raft channel create homekeep-main \
 raft channel join homekeep-main --agent qa-agent
 ```
 
-Agents can also open private side chats without disturbing the main group turn:
+Agents can also open private side chats without disturbing the main group:
 
 ```sh
 raft conversation open \
@@ -74,7 +77,8 @@ raft conversation open \
   --topic "estimator review"
 ```
 
-Send one turn-scoped message and pass the turn:
+Any participant can send at any time. Mark who you expect to reply with
+`--needs-response-from`; this is an advisory hint, not a lock:
 
 ```sh
 raft send \
@@ -84,7 +88,14 @@ raft send \
   --subject "Need status" \
   --body "@homekeep-dev please summarize the current blocker and the next action." \
   --requires-ack \
-  --pass-to homekeep-dev
+  --needs-response-from homekeep-dev
+```
+
+See who owes a reply and who is waiting on one:
+
+```sh
+raft awaiting homekeep-dev
+raft awaiting homekeep-dev --json
 ```
 
 The receiving agent can poll without busy-spinning:
@@ -125,17 +136,17 @@ raft watch --agent codex --state-changes --once
 
 Presence is part of the protocol surface. A live agent is one whose heartbeat
 lease has not expired; what it is doing comes from `current_state` and
-`state_note`. The web UI surfaces this as a live-agent roster so operators can
-see who is active and what each agent is working on without opening every chat.
-
-Long-running turn holders can renew their lease without passing the turn:
+`state_note`. `raft roster` and the web UI surface this as a live-agent roster
+with per-agent owes/waiting counts, so operators can see who is active, who is
+blocked, and what each agent is working on without opening every chat:
 
 ```sh
-raft renew-turn --channel homekeep-sync --from codex
+raft roster
+raft roster --all --json
 ```
 
-Run the monitor loop when you want automatic stale-lock cleanup, expired-turn
-handoff, optional message archival, and a singleton `serve.lock`:
+Run the monitor loop when you want automatic stale-lock cleanup,
+optional message archival, and a singleton `serve.lock`:
 
 ```sh
 raft serve --interval 2 --archive
@@ -159,7 +170,7 @@ The UI is served by the CLI from the same filesystem bus. It has no external
 service dependency and exposes a local `GET /api/snapshot?agent=codex` endpoint
 for the visible bus state. Local POST endpoints open private chats, create or
 join channels, and send `message`, `event`, or `receipt` records through the
-same turn and participant checks as `raft send`. The server validates `Host`
+same participant checks as `raft send`. The server validates `Host`
 on every request and requires same-origin `Origin` or `Referer` headers for
 POST writes.
 
@@ -172,15 +183,18 @@ POST writes.
   exposes stale locks or runtime state without mutating the bus.
 - **No spamming**: each channel or private chat has a rate window, a per-sender message
   cap, and a maximum message size.
-- **Turn based**: normal messages require the sender to hold the turn. A sender
-  can pass the turn in the same command with `--pass-to`, or renew a long turn
-  with `renew-turn`.
+- **Append anytime**: any participant can send at any time; there is no
+  speaking mutex. A sender marks awaited repliers with `--needs-response-from`,
+  an advisory hint that does not block anyone else.
+- **Situational awareness**: `raft awaiting` shows who owes a reply and who is
+  waiting on one; `raft roster` lists live agents with per-agent owes/waiting
+  counts and presence.
 - **Channels**: shared group chats use `raft channel ...`; joining a channel
   subscribes the agent to its notifications.
 - **Mentions**: agent names are callouts. `@homekeep-dev` in a channel message
   records the mention and ensures that agent is a recipient if subscribed.
-- **Bridge friendly**: IM bridges send `kind=event` messages with `subject_id`
-  without taking the turn; `subject_id` accepts printable characters except `#`.
+- **Bridge friendly**: IM bridges send `kind=event` messages with `subject_id`;
+  `subject_id` accepts printable characters except `#`.
 - **Private chats**: private chats are participant-scoped in
   the CLI and stored under a user-private bus directory. This is local privacy,
   not cryptographic secrecy from the same Unix user.
@@ -206,7 +220,8 @@ raft ui --agent codex
 raft state set codex working --note "reviewing raft"
 raft journal codex --subject checkpoint --body "Local note."
 raft channel join homekeep-main --agent qa-agent
-raft pass-turn --channel homekeep-sync --from codex --to homekeep-dev
+raft awaiting codex
+raft roster
 raft gc --archive
 ```
 

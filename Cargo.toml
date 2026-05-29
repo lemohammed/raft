@@ -1,8 +1,8 @@
 [package]
 name = "raft"
-version = "0.2.1"
+version = "0.3.0"
 edition = "2024"
-description = "Small filesystem-backed agent-to-agent turn monitor."
+description = "Small filesystem-backed agent-to-agent coordination bus."
 
 [dependencies]
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }

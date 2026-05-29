@@ -1,11 +1,14 @@
 # Raft Filesystem Protocol
 
+> **Note:** This `raft` is a filesystem-backed agent-to-agent coordination bus.
+> It is unrelated to the Raft distributed-consensus algorithm.
+
 This protocol intentionally uses only portable OS primitives:
 
 - `mkdir` as an atomic lock acquire.
 - `rename`/`os.replace` as an atomic commit.
 - JSON files as durable state.
-- Wall-clock TTLs for cross-process leases, locks, and turns.
+- Wall-clock TTLs for cross-process leases and locks.
 - Monotonic process timers only for local wait timeouts.
 
 `raft` is a same-host, same-user coordination tool. Do not put the bus on NFS,
@@ -26,7 +29,6 @@ run/bus/
   conversations/
     homekeep-sync/
       meta.json
-      turn.json
       rate.json        # mutable rate counters; rate config lives in meta.json
       messages/
         m-YYYYMMDDTHHMMSSmmm-xxxxxxxxxxxx.json
@@ -100,12 +102,12 @@ Writers should only remove a non-stale lock if they own its token.
 
 Because persisted leases use wall-clock `expires_at`, laptop sleep/wake and
 large NTP corrections can cause surprising behavior. If the machine sleeps
-mid-lock or mid-turn, expect `gc`/`serve` to treat the holder as expired and
-force a handoff. If the clock moves backward, cleanup can be delayed.
+mid-lock, expect `gc`/`serve` to treat the lock holder as expired and reap it.
+If the clock moves backward, cleanup can be delayed.
 
 `raft serve` also owns `locks/serve.lock` and refreshes it while running. A
-second monitor process should fail to acquire that lock instead of racing turn
-expiry and cleanup.
+second monitor process should fail to acquire that lock instead of racing
+cleanup.
 
 ## Atomic Writes
 
@@ -169,31 +171,25 @@ or private groups. `raft conversation open --from A --to B,C` is the
 convenience path for opening a private side chat. `raft conversation create`
 remains the lower-level compatibility path.
 
-`turn.json` defines the current turn holder:
+There is no turn lock. Any participant may append a `kind: "message"` at any
+time, subject only to the rate limit and message-size cap. This is a
+deliberate change from earlier versions: a per-conversation speaking mutex
+caused head-of-line blocking and hid situational awareness. Coordination is now
+advisory rather than enforced.
 
-```json
-{
-  "_v": 1,
-  "holder": "codex",
-  "counter": 1,
-  "turn_ttl_seconds": 600,
-  "updated_at": "2026-05-28T15:00:00Z",
-  "expires_at": "2026-05-28T15:10:00Z"
-}
-```
+A sender can mark which participants are expected to reply by listing them in
+`needs_response_from` on the message (CLI: `--needs-response-from a,b`). This is
+an advisory addressing hint, not a lock; it does not prevent anyone else from
+sending. Listed agents are automatically added to the message recipients.
 
-`kind: "message"` may only be written by the current holder. The holder can
-pass the turn by updating `turn.json` under the conversation lock. A holder can
-also run `raft renew-turn` to extend `expires_at` by `turn_ttl_seconds` without
-changing `counter`; raft writes a `system` message so other participants can see
-the renewal.
-
-If a turn expires, `raft gc` or `raft serve` reassigns the turn to the next
-active participant, falling back to round-robin order if no heartbeats are live.
-For laptop sleep/wake tolerance, the previous holder has a short 60 second grace
-window: a normal send or `renew-turn` during that window extends the lease
-without incrementing `counter`; after the grace window raft reassigns the turn
-and reports a specific "your turn expired" error.
+An **open ask** is any message whose reply is still outstanding. A message
+counts as an open ask if it lists `needs_response_from`, or if it set
+`requires_ack`. The ask is owed by each awaited agent (the `needs_response_from`
+set, or the recipients when only `requires_ack` is used) and closes for a given
+agent once that agent records a terminal receipt (`ack --status done` or
+`rejected`). `raft awaiting <agent>` reports the asks an agent owes and the
+asks it is waiting on; `raft roster` aggregates per-agent `owes`/`waiting_on`
+counts alongside live presence.
 
 `status --agent <id>` hides private conversations that do not include that
 agent. Unscoped `status` is an admin/debug view for the local user and can show
@@ -201,11 +197,10 @@ all same-user state.
 
 ## Message Kinds
 
-- `message`: turn-scoped agent-to-agent work. Only the current turn holder can
-  send it. Only this kind may use `--pass-to`.
+- `message`: agent-to-agent work. Any participant may append at any time. Only
+  this kind may use `--needs-response-from` to mark awaited repliers.
 - `event`: append-anytime external input, intended for IM bridges and similar
-  inbound sources. It does not take or pass the turn, but it is still rate
-  limited and appears unread to recipients.
+  inbound sources. It is rate limited and appears unread to recipients.
 - `receipt`: append-anytime compatibility feedback. Prefer the `ack` command
   for normal feedback. Receipts do not count as unread.
 - `system`: reserved for raft itself. User agents and bridges must not write
@@ -215,8 +210,8 @@ all same-user state.
 For Telegram, Slack, or another IM bridge, claim a bridge agent name and join
 the channel as a subscriber, then relay inbound human messages as
 `kind: "event"` with a stable `subject_id` such as
-`telegram:<chat-id>:<user-id>`. That avoids starving real agents by taking the
-turn while still allowing per-human rate limiting.
+`telegram:<chat-id>:<user-id>`. The stable `subject_id` keeps one noisy human
+from throttling the whole bridge while still allowing per-human rate limiting.
 
 ## Messages
 
@@ -235,6 +230,7 @@ Message files are immutable after commit:
   "body": "@homekeep-dev please summarize the blocker.",
   "created_at": "2026-05-28T15:00:00Z",
   "requires_ack": true,
+  "needs_response_from": ["homekeep-dev"],
   "subject_id": null,
   "after": null
 }
@@ -242,6 +238,11 @@ Message files are immutable after commit:
 
 Recipients may be participant ids, `@agent-name` handles, or `"*"` for all
 participants. Mentioned participants are added to `to` automatically.
+
+`needs_response_from` is an advisory list of participants whose reply the
+sender is waiting on. It defaults to empty, never gates sending, and listed
+agents are added to `to` automatically. Together with `requires_ack` it drives
+the open-ask accounting surfaced by `raft awaiting` and `raft roster`.
 
 `after` is a causal pointer to another message id. It is for threading,
 reply/supersedes display, and agent-side ordering hints. `raft` validates the id
@@ -300,15 +301,14 @@ FSEvents on macOS and inotify on Linux.
 ## Diagnostics
 
 `raft doctor` is a read-only bus integrity check. It does not call `ensure_root`,
-take locks, reap stale locks, advance turns, write receipts, or repair files.
+take locks, reap stale locks, write receipts, or repair files.
 It scans the existing bus and reports:
 
 - missing root or expected bus directories;
 - mode drift from `0700` directories and `0600` JSON files;
 - corrupt JSON in agents, conversations, messages, receipts, locks, watch
   state, and heartbeat state;
-- conversation metadata/turn mismatches, invalid participants, unclaimed
-  participants, bad rate config, and turn holders outside the participant set;
+- invalid participants, unclaimed participants, and bad rate config;
 - forged `system` messages, messages with recipients outside the conversation,
   dangling `after` pointers, and orphaned receipt directories;
 - stale locks and runtime watcher state whose pid no longer appears live.
@@ -322,6 +322,5 @@ report with counts and issue records.
 
 - Crashed writer: lock TTL expires and `gc` removes it.
 - Crashed monitor: no protocol state is lost; run `gc` or restart `serve`.
-- Missing recipient heartbeat: turn expiry still uses participant order.
 - Oversized or spammy sender: `send` rejects messages beyond configured limits.
 - Corrupt JSON: CLI refuses to operate on the corrupt file rather than guessing.

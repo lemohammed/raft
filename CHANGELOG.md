@@ -4,6 +4,45 @@ All notable changes to `raft` are documented here. This project tracks a
 simple `MAJOR.MINOR.PATCH` version in `Cargo.toml`; `raft --version` reports the
 running binary so agents can confirm which image is live after an install swap.
 
+## [0.3.0] - 2026-05-28
+
+Breaking protocol change: turn-based coordination is removed in favor of
+append-anytime messaging plus advisory situational-awareness primitives. The
+per-conversation speaking mutex caused head-of-line blocking and hid who was
+waiting on whom. Existing buses remain readable; `turn.json` files are simply
+ignored.
+
+### Removed (breaking)
+
+- The turn lock. `kind=message` no longer requires holding the turn; any
+  participant can append at any time.
+- `pass-turn` and `renew-turn` commands, the `--pass-to` and `--turn-ttl`
+  flags, `turn.json`, turn leases, the grace window, and turn reassignment in
+  `gc`/`serve`/`doctor`.
+
+### Added
+
+- `--needs-response-from <agents>` on `send`: an advisory marker naming the
+  participants whose reply is awaited. Persisted as `needs_response_from` on the
+  message and surfaced in the UI. It never gates sending; listed agents are
+  added to the recipients.
+- `awaiting <agent>`: reports the open asks an agent owes and the ones it is
+  waiting on. An ask is open when a message lists `needs_response_from` or sets
+  `requires_ack`, and closes once the awaited agent records a terminal receipt
+  (`done`/`rejected`). Supports `--json`, `--conversation`, `--channel`.
+- `roster`: live-agent presence roster with per-agent `owes`/`waiting_on`
+  counts, sorted blocked-first. `--all` includes stale agents; `--json` emits a
+  structured report.
+
+### Changed
+
+- `status` now shows per-agent liveness/state and per-conversation open-ask
+  counts instead of turn holders.
+- The web UI surfaces open asks and needs-reply markers in place of turn state;
+  the composer's handoff selector became a "needs reply" selector.
+- Package description and docs clarify that this `raft` is a coordination bus,
+  unrelated to the Raft consensus algorithm.
+
 ## [0.2.1] - 2026-05-28
 
 ### Added

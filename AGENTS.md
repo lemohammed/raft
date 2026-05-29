@@ -1,6 +1,6 @@
 # Agent Instructions
 
-Use the Rust `raft` CLI for concise, turn-based local A2A communication. The shared bus is:
+Use the Rust `raft` CLI for concise, append-anytime local A2A communication. The shared bus is:
 
 ```sh
 export RAFT_ROOT=/Users/mohamad.hassan/workspace/raft/run/bus
@@ -41,10 +41,11 @@ The claimed name is also the mention handle. Other agents can call you out as
 - Channels are group chats. Join a channel to subscribe the agent to
   notifications for that channel.
 - Private side chats are for smaller subsets and should stay scoped.
-- Normal `kind=message` messages require the sender to hold the turn.
+- Any participant may send at any time; there is no turn to hold or pass.
 - `kind=system` is reserved for raft internals. Do not send it manually.
 - Include a specific request, current context, and expected response shape.
-- Pass the turn when another agent should respond:
+- Mark who should respond with `--needs-response-from` so it shows up in their
+  `raft awaiting` view:
 
 ```sh
 $RAFT_BIN send \
@@ -54,7 +55,14 @@ $RAFT_BIN send \
   --subject "Estimator fix status" \
   --body "@codex implemented X. Blocked on Y. Please review Z." \
   --requires-ack \
-  --pass-to codex
+  --needs-response-from codex
+```
+
+Check what you owe and what you are waiting on:
+
+```sh
+$RAFT_BIN awaiting homekeep-dev
+$RAFT_BIN roster
 ```
 
 Join a channel:
@@ -92,7 +100,6 @@ $RAFT_BIN status --agent homekeep-dev
 - Telegram, Slack, or browser bridge agents should claim a name, then join the
   channel as normal subscribers.
 - Inbound human messages should use `--kind event` and a stable `--subject-id`.
-- Bridge events do not take or pass the turn, so they should not use `--pass-to`.
 
 ```sh
 $RAFT_BIN send \
@@ -110,7 +117,8 @@ $RAFT_BIN send \
 - Batch related notes into one message.
 - Prefer `wait --interval 2` for background loops. Use a lower interval such as
   `0.25` only for an active pair-coding loop.
-- Do not send repeated status pings. Send one message, pass the turn, and wait.
+- Do not send repeated status pings. Send one message, mark the awaited
+  replier with `--needs-response-from`, and wait.
 - Bridge agents must use `--subject-id` so one noisy human does not throttle the
   whole bridge.
 - Keep messages under the default 32 KiB limit. Link to files for large logs.
@@ -151,7 +159,7 @@ $RAFT_BIN --root "$RAFT_ROOT" journal homekeep-dev --subject checkpoint --body "
 
 - If a command exits non-zero, do not retry in a loop. Read the error and fix
   the state or wait for the monitor.
-- If a turn holder disappears, run:
+- If locks look stale or state looks inconsistent, run:
 
 ```sh
 $RAFT_BIN --root "$RAFT_ROOT" gc
@@ -165,8 +173,8 @@ $RAFT_BIN --root "$RAFT_ROOT" serve --interval 2 --archive
 
 - Only one `serve` process should run per bus. It owns `locks/serve.lock`.
 - The bus is same-host only. Do not share it over NFS/SMB/cloud-sync folders.
-- Lease expiry uses wall-clock timestamps. If the laptop sleeps mid-turn or
-  mid-lock, expect a forced handoff after wake.
+- Lease expiry uses wall-clock timestamps. If the laptop sleeps mid-lock,
+  expect `gc`/`serve` to reap the lock after wake.
 - Do not edit JSON state by hand unless the CLI is unavailable. If manual edits
   are required, acquire the corresponding lock directory first and commit by
   writing a temp file in the target directory, fsyncing it, and atomically
