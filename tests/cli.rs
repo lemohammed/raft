@@ -3663,3 +3663,27 @@ fn me_reports_the_agents_own_heartbeat_liveness() {
         "text `me` should tell the agent how to recover"
     );
 }
+
+#[test]
+fn not_claimed_errors_suggest_nearest_agent_ids() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(&bus, &["claim", "alice", "--workspace", "."]);
+
+    // A mistyped id gets a recovery path, mirroring the conversation-not-found
+    // suggestions, rather than a bare "not claimed" string.
+    let typo = run_fail(&bus, &["me", "alise", "--json"]);
+    let err: serde_json::Value = serde_json::from_slice(&typo.stderr).unwrap();
+    assert_eq!(err["error"]["code"], "not_claimed");
+    let suggestions = err["error"]["suggestions"].as_array().unwrap();
+    assert!(
+        suggestions.iter().any(|s| s == "alice"),
+        "expected `alice` among suggestions, got {suggestions:?}"
+    );
+
+    // A wholly unrelated id has no near match, so no suggestions key is forced.
+    let miss = run_fail(&bus, &["state", "get", "zzzzzzzz", "--json"]);
+    let miss_err: serde_json::Value = serde_json::from_slice(&miss.stderr).unwrap();
+    assert_eq!(miss_err["error"]["code"], "not_claimed");
+    assert!(miss_err["error"].get("suggestions").is_none());
+}

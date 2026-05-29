@@ -11,6 +11,12 @@ shell out to `raft` can branch on results reliably.
 
 ### Added
 
+- `not_claimed` errors now carry nearest-match agent-id `suggestions`, the same
+  recovery affordance `not_found` already gives for conversation/channel ids. A
+  mistyped agent id on `me`, `heartbeat`, `state set`/`get`, or `register`
+  previously returned a bare "not claimed" string, leaving a brand-new agent
+  that fat-fingered its own name to guess; it now gets `{"suggestions":[…]}`
+  (closest first, omitted when nothing is close) and recovers in one shot.
 - `me` now reports the agent's own heartbeat liveness as `live` (plus
   `expires_at`), and text mode prints a `STALE: … run 'raft heartbeat <id>'`
   banner when it has lapsed. raft computes liveness everywhere else only for

@@ -291,12 +291,7 @@ fn cmd_register(root: &Path, args: RegisterArgs) -> Result<()> {
         LOCK_TIMEOUT_SECONDS,
     )?;
     let previous: Agent = read_json(&agent_path(root, &agent_id))?
-        .ok_or_else(|| {
-            RaftError::coded(
-                "not_claimed",
-                format!("agent @{agent_id} is not claimed; use raft claim"),
-            )
-        })?;
+        .ok_or_else(|| not_claimed(root, &agent_id))?;
     let workspace = args
         .workspace
         .map(|path| resolve_path(&path))
@@ -369,12 +364,7 @@ fn heartbeat_once(
         LOCK_TIMEOUT_SECONDS,
     )?;
     let previous: Agent = read_json(&agent_path(root, agent_id))?
-        .ok_or_else(|| {
-            RaftError::coded(
-                "not_claimed",
-                format!("agent @{agent_id} is not claimed; use raft claim"),
-            )
-        })?;
+        .ok_or_else(|| not_claimed(root, &agent_id))?;
     let ttl = ttl_override.unwrap_or(previous.ttl_seconds);
     let payload = Agent {
         v: SCHEMA_VERSION,
@@ -405,12 +395,7 @@ fn cmd_heartbeat_watch(
     interval_override: Option<f64>,
 ) -> Result<()> {
     let previous: Agent = read_json(&agent_path(root, agent_id))?
-        .ok_or_else(|| {
-            RaftError::coded(
-                "not_claimed",
-                format!("agent @{agent_id} is not claimed; use raft claim"),
-            )
-        })?;
+        .ok_or_else(|| not_claimed(root, &agent_id))?;
     let ttl = ttl_override.unwrap_or(previous.ttl_seconds);
     let interval = interval_override.unwrap_or_else(|| (ttl as f64 / 2.0).max(1.0));
     if !interval.is_finite() || interval <= 0.0 {
@@ -483,12 +468,7 @@ fn cmd_state_set(root: &Path, args: StateSetArgs) -> Result<()> {
         LOCK_TIMEOUT_SECONDS,
     )?;
     let previous: Agent = read_json(&agent_path(root, &agent_id))?
-        .ok_or_else(|| {
-            RaftError::coded(
-                "not_claimed",
-                format!("agent @{agent_id} is not claimed; use raft claim"),
-            )
-        })?;
+        .ok_or_else(|| not_claimed(root, &agent_id))?;
     let changed = previous.current_state != state || previous.state_note != args.note;
     let now = iso_now();
     let payload = Agent {
@@ -527,12 +507,7 @@ fn cmd_state_get(root: &Path, args: StateGetArgs) -> Result<()> {
     let agent_id = validate_id(&args.agent, "agent id")?;
     ensure_root(root)?;
     let agent: Agent = read_json(&agent_path(root, &agent_id))?
-        .ok_or_else(|| {
-            RaftError::coded(
-                "not_claimed",
-                format!("agent @{agent_id} is not claimed; use raft claim"),
-            )
-        })?;
+        .ok_or_else(|| not_claimed(root, &agent_id))?;
     if args.json {
         println!(
             "{}",
@@ -1536,10 +1511,7 @@ fn cmd_me(root: &Path, args: MeArgs) -> Result<()> {
     // otherwise see nothing wrong while every peer's `wait --owed` deadlocks on
     // a reply it doesn't know it looks too dead to be expected to send.
     let Some(me): Option<Agent> = read_json(&agent_path(root, &agent))? else {
-        bail_code!(
-            "not_claimed",
-            "agent @{agent} is not claimed; use raft claim"
-        );
+        return Err(not_claimed(root, &agent));
     };
 
     // Unread totals and per-conversation counts, from a single visibility scan.
@@ -2687,6 +2659,42 @@ fn conversation_ids(root: &Path) -> Vec<String> {
 fn conversation_not_found(root: &Path, id: &str, noun: &str) -> RaftError {
     let err = RaftError::coded("not_found", format!("{noun} {id:?} does not exist"));
     let suggestions = nearest_ids(id, &conversation_ids(root), 3);
+    if suggestions.is_empty() {
+        err
+    } else {
+        err.with_details(serde_json::json!({ "suggestions": suggestions }))
+    }
+}
+
+/// Ids of every claimed agent (live or stale), used for typo suggestions.
+fn agent_ids(root: &Path) -> Vec<String> {
+    let Ok(entries) = sorted_read_dir(&root.join("agents")) else {
+        return Vec::new();
+    };
+    entries
+        .into_iter()
+        .filter_map(|entry| {
+            let path = entry.path();
+            if path.extension() == Some(OsStr::new("json")) {
+                path.file_stem()
+                    .and_then(|name| name.to_str())
+                    .map(str::to_string)
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// A `not_claimed` error enriched with nearest-match agent-id `suggestions`, so
+/// an agent that mistypes its own id (or a peer's) gets a one-shot recovery
+/// path instead of a bare string. Mirrors [`conversation_not_found`].
+fn not_claimed(root: &Path, agent_id: &str) -> RaftError {
+    let err = RaftError::coded(
+        "not_claimed",
+        format!("agent @{agent_id} is not claimed; use raft claim"),
+    );
+    let suggestions = nearest_ids(agent_id, &agent_ids(root), 3);
     if suggestions.is_empty() {
         err
     } else {

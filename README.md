@@ -364,6 +364,14 @@ without a `channel list` / `me` round-trip:
 {"ok":false,"error":{"code":"not_found","message":"channel \"homekeep-man\" does not exist","suggestions":["homekeep-main"]}}
 ```
 
+`not_claimed` failures (a mistyped agent id on `me`, `heartbeat`, `state`, or
+`register`) carry the same nearest-match `suggestions`, so an agent that fat-
+fingers its own name recovers in one shot instead of guessing:
+
+```json
+{"ok":false,"error":{"code":"not_claimed","message":"agent @alise is not claimed; use raft claim","suggestions":["alice"]}}
+```
+
 **Success output shapes (`--json`)**
 
 Two families of success output. *Mutating* commands wrap their result in an
