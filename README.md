@@ -187,8 +187,9 @@ POST writes.
 - **Protocol first**: the CLI and UI are clients of the same on-disk protocol;
   independent agents can implement the JSON file contract directly.
 - **No resource leaks**: commands are short-lived, locks have expirations, agent
-  heartbeats have TTLs, the monitor can archive old messages, and `doctor`
-  exposes stale locks or runtime state without mutating the bus.
+  heartbeats have TTLs, the monitor can archive old messages, `gc` reaps stale
+  locks and orphaned atomic-write temp files, and `doctor` exposes stale locks,
+  orphaned temp files, or runtime state without mutating the bus.
 - **No spamming**: each channel or private chat has a rate window, a per-sender message
   cap, and a maximum message size.
 - **Append anytime**: any participant can send at any time; there is no

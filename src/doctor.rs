@@ -2,6 +2,7 @@ use crate::SCHEMA_VERSION;
 use crate::cli::DoctorArgs;
 use crate::error::Result;
 use crate::receipt_recipients;
+use crate::storage::collect_orphan_temp_files;
 use crate::types::{Agent, HeartbeatState, LockOwner, Message, Meta, Receipt, WatchState};
 use crate::util::{parse_time, process_is_alive, validate_agent_state, validate_id};
 use chrono::Utc;
@@ -159,8 +160,27 @@ fn build_doctor_report(root: &Path, strict: bool) -> DoctorReport {
     doctor_scan_runtime_states(root, &mut report, &claimed_agents);
     doctor_scan_locks(root, &mut report);
     doctor_scan_conversations(root, &mut report, &claimed_agents);
+    doctor_scan_orphan_temp_files(root, &mut report);
     report.finalize();
     report
+}
+
+fn doctor_scan_orphan_temp_files(root: &Path, report: &mut DoctorReport) {
+    let orphans = match collect_orphan_temp_files(root) {
+        Ok(orphans) => orphans,
+        Err(err) => {
+            report.error(root, root, "tmp_scan_failed", err.to_string());
+            return;
+        }
+    };
+    for path in orphans {
+        report.warn(
+            root,
+            &path,
+            "orphan_temp_file",
+            "stale atomic-write temp file; run raft gc to reap it",
+        );
+    }
 }
 
 fn doctor_scan_agents(root: &Path, report: &mut DoctorReport) -> BTreeSet<String> {

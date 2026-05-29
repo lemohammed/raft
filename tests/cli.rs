@@ -2127,3 +2127,59 @@ fn doctor_strict_fails_on_warnings() {
     assert_eq!(strict_report["error_count"], 0);
     assert!(strict_report["warning_count"].as_u64().unwrap() >= 1);
 }
+
+fn backdate(path: &PathBuf) {
+    let status = Command::new("touch")
+        .args(["-t", "200001010000"])
+        .arg(path)
+        .status()
+        .unwrap();
+    assert!(status.success(), "touch should backdate {path:?}");
+}
+
+#[test]
+fn gc_reaps_stale_orphan_temp_files_but_keeps_fresh_ones() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+
+    // Two interrupted atomic writes: dot-prefixed ".tmp" siblings.
+    let stale = bus.join("agents").join(".atlas.json.999.deadbeef.tmp");
+    fs::write(&stale, b"{}\n").unwrap();
+    let fresh = bus.join("agents").join(".atlas.json.998.cafef00d.tmp");
+    fs::write(&fresh, b"{}\n").unwrap();
+    backdate(&stale);
+
+    let out = run(&bus, &["gc"]);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("orphan_temp_files=1"),
+        "gc should reap exactly the stale temp file; got: {stdout}"
+    );
+    assert!(!stale.exists(), "stale temp file should be reaped");
+    assert!(
+        fresh.exists(),
+        "a recently written temp file must be preserved (may be an in-flight write)"
+    );
+}
+
+#[test]
+fn doctor_reports_stale_orphan_temp_files() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    let stale = bus.join("conversations").join(".meta.json.1.abc.tmp");
+    fs::create_dir_all(stale.parent().unwrap()).unwrap();
+    fs::write(&stale, b"{}\n").unwrap();
+    backdate(&stale);
+
+    let out = run(&bus, &["doctor", "--json"]);
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(report["ok"], true, "orphan temp files are warnings, not errors");
+    assert!(
+        report["issues"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|issue| issue["code"] == "orphan_temp_file"),
+        "doctor should warn about the stale orphan temp file"
+    );
+}

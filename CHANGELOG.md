@@ -48,6 +48,11 @@ shell out to `raft` can branch on results reliably.
 - Message-id collisions under rapid succession: ids now mix process id and a
   monotonic counter so two sends within the same microsecond no longer overwrite
   each other.
+- Orphaned atomic-write temp files: a crash between an atomic write's create and
+  rename left a dot-prefixed `.tmp` sibling behind forever. `gc` (and therefore
+  `serve`) now reaps `.tmp` files older than 5 minutes — old enough to never
+  touch an in-flight write — and reports the count as `orphan_temp_files`.
+  `doctor` warns about them under the `orphan_temp_file` code.
 
 ## [0.3.0] - 2026-05-28
 

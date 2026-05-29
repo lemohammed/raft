@@ -1835,6 +1835,7 @@ fn cmd_gc(root: &Path, args: GcArgs) -> Result<()> {
     ensure_root(root)?;
     let mut stale_locks = 0;
     let mut archived_messages = 0;
+    let mut orphan_temp_files = 0;
 
     for entry in sorted_read_dir(&root.join("locks"))? {
         let path = entry.path();
@@ -1844,6 +1845,12 @@ fn cmd_gc(root: &Path, args: GcArgs) -> Result<()> {
         if lock_is_stale(&path)? {
             let _ = fs::remove_dir_all(&path);
             stale_locks += 1;
+        }
+    }
+
+    for path in collect_orphan_temp_files(root)? {
+        if fs::remove_file(&path).is_ok() {
+            orphan_temp_files += 1;
         }
     }
 
@@ -1867,7 +1874,7 @@ fn cmd_gc(root: &Path, args: GcArgs) -> Result<()> {
     }
 
     println!(
-        "gc complete: stale_locks={stale_locks} archived_messages={archived_messages}"
+        "gc complete: stale_locks={stale_locks} archived_messages={archived_messages} orphan_temp_files={orphan_temp_files}"
     );
     Ok(())
 }

@@ -261,6 +261,58 @@ pub(crate) fn set_dir_private(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// `atomic_write_json` writes a dot-prefixed sibling ending in ".tmp" and
+/// renames it into place. A crash between create and rename orphans one. They
+/// are only ever transient, so anything older than this is safe to reap.
+pub(crate) const ORPHAN_TMP_STALE_SECONDS: u64 = 300;
+
+/// True for the transient sibling files written by [`atomic_write_json`].
+pub(crate) fn is_temp_artifact(name: &str) -> bool {
+    name.starts_with('.') && name.ends_with(".tmp")
+}
+
+fn temp_file_is_stale(path: &Path) -> bool {
+    let Ok(metadata) = fs::metadata(path) else {
+        return false;
+    };
+    let Ok(modified) = metadata.modified() else {
+        return false;
+    };
+    modified
+        .elapsed()
+        .map(|elapsed| elapsed > Duration::from_secs(ORPHAN_TMP_STALE_SECONDS))
+        .unwrap_or(false)
+}
+
+/// Recursively collect orphaned temp files under `root` older than
+/// [`ORPHAN_TMP_STALE_SECONDS`]. Symlinks are not followed, so a malicious or
+/// stray symlink cannot redirect the sweep outside the bus tree.
+pub(crate) fn collect_orphan_temp_files(root: &Path) -> Result<Vec<PathBuf>> {
+    let mut found = Vec::new();
+    collect_orphan_temp_files_into(root, &mut found)?;
+    Ok(found)
+}
+
+fn collect_orphan_temp_files_into(dir: &Path, found: &mut Vec<PathBuf>) -> Result<()> {
+    for entry in sorted_read_dir(dir)? {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        let path = entry.path();
+        if file_type.is_dir() {
+            collect_orphan_temp_files_into(&path, found)?;
+        } else if file_type.is_file() {
+            let Some(name) = path.file_name().and_then(OsStr::to_str) else {
+                continue;
+            };
+            if is_temp_artifact(name) && temp_file_is_stale(&path) {
+                found.push(path);
+            }
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn sorted_read_dir(path: &Path) -> Result<Vec<fs::DirEntry>> {
     let mut entries = match fs::read_dir(path) {
         Ok(entries) => entries.collect::<std::result::Result<Vec<_>, _>>()?,
