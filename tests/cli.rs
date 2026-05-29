@@ -367,6 +367,20 @@ fn error_codes_are_stable_for_common_failures() {
     );
     let dup_conv_json: serde_json::Value = serde_json::from_slice(&dup_conv.stderr).unwrap();
     assert_eq!(dup_conv_json["error"]["code"], serde_json::json!("conflict"));
+
+    // Sending from an id outside the conversation's participants is not_participant.
+    run(
+        &bus,
+        &[
+            "conversation", "create", "room", "--participants", "alice,bob", "--starter", "alice",
+        ],
+    );
+    let outsider = run_fail(
+        &bus,
+        &["send", "--conversation", "room", "--from", "carol", "--to", "bob", "--subject", "x", "--body", "y", "--json"],
+    );
+    let outsider_json: serde_json::Value = serde_json::from_slice(&outsider.stderr).unwrap();
+    assert_eq!(outsider_json["error"]["code"], serde_json::json!("not_participant"));
 }
 
 #[test]
