@@ -902,7 +902,7 @@ pub(crate) fn send_message(root: &Path, input: SendMessageInput) -> Result<Messa
 
 
 fn ask_is_terminal(status: &str) -> bool {
-    matches!(status, "done" | "rejected")
+    TERMINAL_ACK_STATUSES.contains(&status)
 }
 
 fn message_awaited(message: &Message, meta: &Meta) -> Vec<String> {
@@ -1580,7 +1580,7 @@ fn cmd_read(root: &Path, args: ReadArgs) -> Result<()> {
 
 fn cmd_ack(root: &Path, args: AckArgs) -> Result<()> {
     let agent_id = validate_id(&args.agent, "agent id")?;
-    validate_id(&args.status, "status")?;
+    let status = validate_ack_status(&args.status)?;
     ensure_root(root)?;
     let (_, message) = find_message(root, &args.message_id)?;
     let _lock = DirLock::acquire(
@@ -1589,15 +1589,15 @@ fn cmd_ack(root: &Path, args: AckArgs) -> Result<()> {
         LOCK_TTL_SECONDS,
         LOCK_TIMEOUT_SECONDS,
     )?;
-    write_receipt(root, &agent_id, &message, &args.status, args.note)?;
+    write_receipt(root, &agent_id, &message, &status, args.note)?;
     if args.json {
         emit_ok(serde_json::json!({
             "message_id": args.message_id,
             "agent": agent_id,
-            "status": args.status,
+            "status": status,
         }))?;
     } else {
-        println!("{} {}", args.status, args.message_id);
+        println!("{} {}", status, args.message_id);
     }
     Ok(())
 }

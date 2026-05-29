@@ -37,6 +37,11 @@ shell out to `raft` can branch on results reliably.
 
 - `wait`/`watch` wake on filesystem events via `notify` instead of pure
   polling, falling back to interval polling when a watch cannot be established.
+- `ack --status` now validates against a fixed set (`received`, `accepted`,
+  `working`, `blocked`, `done`, `rejected`) and rejects anything else. Previously
+  any id-shaped string was accepted, but only `done`/`rejected` close an open
+  ask, so a typo like `--status finished` silently left the ask open. The
+  recognized statuses and which ones are terminal are documented in `ack --help`.
 
 ### Fixed
 

@@ -35,6 +35,27 @@ pub(crate) fn validate_agent_state(value: &str) -> Result<String> {
     }
 }
 
+/// Recognized acknowledgement statuses, in lifecycle order. Statuses outside
+/// this set are rejected so callers cannot record an ack that silently fails to
+/// close an open ask. The terminal members are listed in [`TERMINAL_ACK_STATUSES`].
+pub(crate) const ACK_STATUSES: &[&str] =
+    &["received", "accepted", "working", "blocked", "done", "rejected"];
+
+/// Acknowledgement statuses that close an open ask. Keep in sync with
+/// `ask_is_terminal`; both read from this single source of truth.
+pub(crate) const TERMINAL_ACK_STATUSES: &[&str] = &["done", "rejected"];
+
+pub(crate) fn validate_ack_status(value: &str) -> Result<String> {
+    if ACK_STATUSES.contains(&value) {
+        Ok(value.to_string())
+    } else {
+        bail!(
+            "invalid status {value:?}; use one of: {}",
+            ACK_STATUSES.join(", ")
+        );
+    }
+}
+
 pub(crate) fn validate_id(value: &str, label: &str) -> Result<String> {
     let bytes = value.as_bytes();
     if bytes.is_empty() || bytes.len() > 80 || !bytes[0].is_ascii_alphanumeric() {

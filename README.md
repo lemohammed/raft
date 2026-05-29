@@ -206,8 +206,10 @@ POST writes.
 - **Private chats**: private chats are participant-scoped in
   the CLI and stored under a user-private bus directory. This is local privacy,
   not cryptographic secrecy from the same Unix user.
-- **Feedback loop**: `read` records read receipts and `ack` records statuses
-  such as `accepted`, `done`, or `blocked`.
+- **Feedback loop**: `read` records read receipts and `ack` records one of a
+  fixed set of statuses (`received`, `accepted`, `working`, `blocked`, `done`,
+  `rejected`); `done` and `rejected` close an open ask, the rest are progress
+  updates.
 - **OS primitive compatible**: every state transition is a JSON file update
   protected by an atomic directory lock and committed via atomic rename.
 

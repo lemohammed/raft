@@ -1665,6 +1665,74 @@ fn awaiting_tracks_open_asks_until_resolved() {
 }
 
 #[test]
+fn ack_rejects_unknown_status_and_nonterminal_keeps_ask_open() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(&bus, &["claim", "sender-x", "--workspace", "."]);
+    run(&bus, &["claim", "ower-y", "--workspace", "."]);
+    run(
+        &bus,
+        &[
+            "conversation",
+            "create",
+            "c",
+            "--participants",
+            "sender-x,ower-y",
+            "--starter",
+            "sender-x",
+        ],
+    );
+    let sent = run(
+        &bus,
+        &[
+            "send",
+            "--conversation",
+            "c",
+            "--from",
+            "sender-x",
+            "--to",
+            "ower-y",
+            "--subject",
+            "need answer",
+            "--body",
+            "please respond",
+            "--needs-response-from",
+            "ower-y",
+        ],
+    );
+    let message_id = String::from_utf8_lossy(&sent.stdout).trim().to_string();
+    run(&bus, &["read", "ower-y", &message_id]);
+
+    // An unrecognized status is rejected with a stable error code.
+    let denied = run_fail(
+        &bus,
+        &["ack", "ower-y", &message_id, "--status", "finished", "--json"],
+    );
+    let envelope: serde_json::Value = serde_json::from_slice(&denied.stderr).unwrap();
+    assert_eq!(envelope["ok"], serde_json::json!(false));
+    assert_eq!(envelope["error"]["code"], serde_json::json!("error"));
+    assert!(
+        String::from_utf8_lossy(&denied.stderr).contains("finished"),
+        "error should echo the rejected status"
+    );
+
+    // A valid but non-terminal status records the receipt yet keeps the ask open.
+    run(&bus, &["ack", "ower-y", &message_id, "--status", "working"]);
+    let owes = run(&bus, &["awaiting", "ower-y", "--json"]);
+    let owes_json: serde_json::Value = serde_json::from_slice(&owes.stdout).unwrap();
+    assert_eq!(
+        owes_json["you_owe"][0]["message_id"], message_id,
+        "non-terminal ack must not close the ask"
+    );
+
+    // A terminal status then closes it.
+    run(&bus, &["ack", "ower-y", &message_id, "--status", "done"]);
+    let owes_after = run(&bus, &["awaiting", "ower-y", "--json"]);
+    let owes_after_json: serde_json::Value = serde_json::from_slice(&owes_after.stdout).unwrap();
+    assert!(owes_after_json["you_owe"].as_array().unwrap().is_empty());
+}
+
+#[test]
 fn requires_ack_creates_open_ask_for_recipient() {
     let bus = temp_bus();
     run(&bus, &["init"]);

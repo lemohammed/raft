@@ -553,7 +553,9 @@ pub(crate) struct AckArgs {
     pub(crate) agent: String,
     /// Message id to acknowledge.
     pub(crate) message_id: String,
-    /// Acknowledgement status (done, accepted, blocked, rejected, ...).
+    /// Acknowledgement status: received, accepted, working, blocked, done, or
+    /// rejected. `done` and `rejected` close an open ask; the rest are progress
+    /// updates.
     #[arg(long, default_value = "done")]
     pub(crate) status: String,
     /// Optional note attached to the acknowledgement.
