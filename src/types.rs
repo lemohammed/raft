@@ -70,6 +70,24 @@ pub(crate) struct Message {
     pub(crate) after: Option<String>,
 }
 
+/// A `Message` decorated with fields relative to the agent reading it, so a
+/// `--json` consumer can answer "is this new?" and "do I still owe a reply?"
+/// without a follow-up `awaiting`/`receipts` round-trip per message. The
+/// `Message` fields are flattened in, so this is a superset of the raw shape.
+#[derive(Serialize)]
+pub(crate) struct ViewMessage {
+    #[serde(flatten)]
+    pub(crate) message: Message,
+    /// The viewer has no read receipt on this message yet.
+    pub(crate) unread: bool,
+    /// The viewer is in this message's still-open awaited set (it requested an
+    /// ack or named the viewer in `needs_response_from`) and the viewer has not
+    /// yet recorded a terminal receipt.
+    pub(crate) awaiting_me: bool,
+    /// The viewer's current ack status on this message, or `null` if none.
+    pub(crate) my_status: Option<String>,
+}
+
 #[derive(Serialize, Deserialize)]
 pub(crate) struct RateState {
     #[serde(rename = "_v", default = "schema_v1")]

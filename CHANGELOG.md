@@ -11,6 +11,18 @@ shell out to `raft` can branch on results reliably.
 
 ### Added
 
+- `inbox`/`show`/`wait`/`watch` (`--json`) now decorate each message with three
+  viewer-relative fields — `unread`, `awaiting_me`, and `my_status` — so an agent
+  can answer "what's new?" and "what do I still owe a reply to?" from a single
+  call. Previously the JSON path emitted the raw message and dropped the unread
+  bit the text path already computed, forcing the agent into an `awaiting`
+  bus-scan plus a `receipts` call per message to reconstruct the same signals.
+  `awaiting_me` is true when the viewer is in the message's still-open awaited
+  set (it set `requires_ack` or named the viewer in `needs_response_from`) and
+  the viewer has not recorded a terminal `done`/`rejected` receipt; `my_status`
+  is the viewer's current ack status or `null`. A new `inbox --needs-action`
+  filter narrows the inbox to messages that are `unread` or `awaiting_me` — the
+  agent's actionable queue. (`read` keeps the raw message shape.)
 - `conversation remove <id> --agent <name>` and `channel leave <ch> --agent
   <name>`: the lifecycle counterpart to `conversation add`/`channel join`.
   Until now a participant set could only grow — an agent that finished its part

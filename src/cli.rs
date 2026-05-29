@@ -516,6 +516,9 @@ pub(crate) struct InboxArgs {
     /// Show only unread messages.
     #[arg(long)]
     pub(crate) unread: bool,
+    /// Show only messages needing action: unread, or an open ask awaiting you.
+    #[arg(long)]
+    pub(crate) needs_action: bool,
     /// Maximum number of messages to list.
     #[arg(long, default_value_t = 20)]
     pub(crate) limit: usize,

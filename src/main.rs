@@ -1634,27 +1634,28 @@ fn cmd_inbox(root: &Path, args: InboxArgs) -> Result<()> {
     let conversation_id =
         optional_target_room(args.conversation.as_deref(), args.channel.as_deref())?;
     ensure_root(root)?;
-    let mut rows = visible_messages(root, &agent_id, conversation_id.as_deref())?;
+    let rows = visible_messages(root, &agent_id, conversation_id.as_deref())?;
+    let mut views = build_views(root, rows, &agent_id)?;
     if args.unread {
-        rows.retain(|message| message_is_unread(root, message, &agent_id));
+        views.retain(|view| view.unread);
     }
-    if rows.len() > args.limit {
-        rows = rows.split_off(rows.len() - args.limit);
+    if args.needs_action {
+        views.retain(|view| view.unread || view.awaiting_me);
+    }
+    if views.len() > args.limit {
+        views = views.split_off(views.len() - args.limit);
     }
     if args.json {
-        println!("{}", serde_json::to_string_pretty(&rows)?);
+        println!("{}", serde_json::to_string_pretty(&views)?);
         return Ok(());
     }
-    if rows.is_empty() {
+    if views.is_empty() {
         println!("no messages");
         return Ok(());
     }
-    for message in rows {
-        let unread = if message_is_unread(root, &message, &agent_id) {
-            "*"
-        } else {
-            " "
-        };
+    for view in views {
+        let unread = if view.unread { "*" } else { " " };
+        let message = &view.message;
         let body = truncated_body(&message.body, args.width);
         println!(
             "{unread} {} {} {} -> {} [{}] {} {}",
@@ -1685,7 +1686,8 @@ fn cmd_wait(root: &Path, args: WaitArgs) -> Result<()> {
             .find(|message| message_is_unread(root, message, &agent_id))
         {
             if args.json {
-                println!("{}", serde_json::to_string_pretty(&message)?);
+                let view = build_view(root, message, &agent_id)?;
+                println!("{}", serde_json::to_string_pretty(&view)?);
             } else {
                 println!("{}", message.id);
             }
@@ -1739,7 +1741,7 @@ fn cmd_watch(root: &Path, args: WatchArgs) -> Result<()> {
             if !should_emit {
                 continue;
             }
-            emit_watch_message(&message, args.json)?;
+            emit_watch_message(root, &message, &agent_id, args.json)?;
             if !args.no_auto_read && !is_state_change_message(&message) {
                 let _lock = DirLock::acquire(
                     root,
@@ -1788,7 +1790,8 @@ fn cmd_show(root: &Path, args: ShowArgs) -> Result<()> {
         rows = rows.split_off(rows.len() - args.limit);
     }
     if args.json {
-        println!("{}", serde_json::to_string_pretty(&rows)?);
+        let views = build_views(root, rows, &agent_id)?;
+        println!("{}", serde_json::to_string_pretty(&views)?);
         return Ok(());
     }
     if rows.is_empty() {
@@ -2375,6 +2378,39 @@ pub(crate) fn message_visible_to(message: &Message, agent_id: &str) -> bool {
             .any(|item| item == "*" || item == agent_id)
 }
 
+/// Decorate a message with viewer-relative fields (`unread`, `awaiting_me`,
+/// `my_status`) so a `--json` reader gets the signals the CLI already computes
+/// instead of re-deriving them with extra `awaiting`/`receipts` calls.
+fn build_view(root: &Path, message: Message, agent_id: &str) -> Result<ViewMessage> {
+    let unread = message_is_unread(root, &message, agent_id);
+    let my_status =
+        read_json::<Receipt>(&receipt_path_for(root, &message, agent_id))?.map(|r| r.status);
+    let meta: Option<Meta> = read_json(
+        &root
+            .join("conversations")
+            .join(&message.conversation_id)
+            .join("meta.json"),
+    )?;
+    let awaiting_me = meta
+        .map(|meta| {
+            message_awaited(&message, &meta).iter().any(|a| a == agent_id)
+                && !my_status.as_deref().map(ask_is_terminal).unwrap_or(false)
+        })
+        .unwrap_or(false);
+    Ok(ViewMessage {
+        message,
+        unread,
+        awaiting_me,
+        my_status,
+    })
+}
+
+fn build_views(root: &Path, rows: Vec<Message>, agent_id: &str) -> Result<Vec<ViewMessage>> {
+    rows.into_iter()
+        .map(|message| build_view(root, message, agent_id))
+        .collect()
+}
+
 pub(crate) fn message_is_unread(root: &Path, message: &Message, agent_id: &str) -> bool {
     if message.kind == "system" || message.kind == "receipt" {
         return false;
@@ -2407,9 +2443,10 @@ fn start_watch_state(root: &Path, agent_id: &str, since: Option<String>) -> Resu
     Ok(state)
 }
 
-fn emit_watch_message(message: &Message, json: bool) -> Result<()> {
+fn emit_watch_message(root: &Path, message: &Message, agent_id: &str, json: bool) -> Result<()> {
     if json {
-        println!("{}", serde_json::to_string(message)?);
+        let view = build_view(root, message.clone(), agent_id)?;
+        println!("{}", serde_json::to_string(&view)?);
     } else {
         println!(
             "{} {} {} -> {} [{}] {} {}",

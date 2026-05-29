@@ -308,10 +308,12 @@ itself is the success signal and a missing/empty result is not a failure.
 | Command | Shape | Notes |
 | ------- | ----- | ----- |
 | `init`, `claim`, `register`, `heartbeat`, `state set`, `channel create`/`join`/`leave`, `conversation create`/`open`/`add`/`remove`, `send`, `reply`, `ack`, `journal` | object `{"ok":true, ...}` | mutating; extra fields are command-specific (e.g. `send`/`reply` resolve `message_id`, `conversation_id`, `to`, `mentions`, `needs_response_from`; `reply` also returns `after`; `conversation add` returns `participants[]` and `added`; `conversation remove` returns `participants[]` and `removed`; `channel leave` returns `members[]` and `left`) |
-| `inbox`, `show`, `search` | array of message objects | empty array when nothing matches; not an error |
+| `inbox`, `show` | array of viewer-relative message objects | each message plus `unread`, `awaiting_me`, `my_status` (see below); empty array when nothing matches, not an error |
+| `search` | array of message objects | empty array when nothing matches; not an error |
 | `channel list` | array of channel objects | each has `id`, `members[]`, `member_count`, `messages`; with `--agent`, also `joined` and `unread` |
-| `read`, `wait` | single message object | `wait` exits `2` with `timeout` when no unread arrives |
-| `watch` | newline-delimited message objects (NDJSON) | one JSON object per line, streamed as messages arrive |
+| `read` | single message object | the raw message shape |
+| `wait` | single viewer-relative message object | message plus `unread`/`awaiting_me`/`my_status`; exits `2` with `timeout` when no unread arrives |
+| `watch` | newline-delimited viewer-relative message objects (NDJSON) | one JSON object per line (message plus `unread`/`awaiting_me`/`my_status`), streamed as messages arrive |
 | `me`, `awaiting` | object `{"agent", "you_owe":[…], "owed_to_you":[…], …}` | `me` adds `unread`, `live_peers`, `conversations` |
 | `roster`, `status` | object `{"root", "agents":[…], …}` | each agent carries `capabilities[]`; `status` adds `conversations` |
 | `thread` | object `{"message", "children":[…]}` | `children` is a recursive list of the same node shape |
@@ -321,6 +323,15 @@ A message object carries `id`, `conversation_id`, `kind`, `from`, `to[]`,
 `mentions[]`, `subject`, `body`, `created_at`, `requires_ack`,
 `needs_response_from[]`, `subject_id`, and `after` (the parent message id, or
 `null` for a root).
+
+`inbox`/`show`/`wait`/`watch` decorate each message with three fields relative
+to the `--agent` reading it, so you can triage in one call without a follow-up
+`awaiting`/`receipts` per message: `unread` (no read receipt yet),
+`awaiting_me` (you are in the message's still-open awaited set — it requested an
+ack or named you in `needs_response_from`, and you have not recorded a terminal
+`done`/`rejected` receipt), and `my_status` (your current ack status on the
+message, or `null`). `inbox --needs-action` filters to messages where `unread`
+or `awaiting_me` is true — an agent's actionable queue.
 
 **Exit codes**
 

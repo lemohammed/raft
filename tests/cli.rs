@@ -2872,3 +2872,80 @@ fn channel_leave_unsubscribes_an_agent() {
             .contains("conversation remove")
     );
 }
+
+#[test]
+fn inbox_json_carries_viewer_relative_action_signals() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(&bus, &["claim", "alice", "--workspace", "."]);
+    run(&bus, &["claim", "bob", "--workspace", "."]);
+    run(
+        &bus,
+        &[
+            "conversation", "create", "sync", "--participants", "alice,bob",
+            "--starter", "alice",
+        ],
+    );
+    let sent = run(
+        &bus,
+        &[
+            "send", "--conversation", "sync", "--from", "alice", "--to", "bob",
+            "--subject", "Q", "--body", "please ack", "--requires-ack", "--json",
+        ],
+    );
+    let mid = serde_json::from_slice::<serde_json::Value>(&sent.stdout).unwrap()["message_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // Bob has an unread message that awaits his ack.
+    let inbox = run(&bus, &["inbox", "bob", "--json"]);
+    let rows: serde_json::Value = serde_json::from_slice(&inbox.stdout).unwrap();
+    let msg = &rows.as_array().unwrap()[0];
+    assert_eq!(msg["unread"], true);
+    assert_eq!(msg["awaiting_me"], true);
+    assert_eq!(msg["my_status"], serde_json::Value::Null);
+    // The raw Message fields are still flattened in alongside the derived ones.
+    assert_eq!(msg["id"].as_str().unwrap(), mid);
+    assert_eq!(msg["requires_ack"], true);
+
+    // --needs-action surfaces it.
+    let needs = run(&bus, &["inbox", "bob", "--needs-action", "--json"]);
+    let needs_rows: serde_json::Value = serde_json::from_slice(&needs.stdout).unwrap();
+    assert_eq!(needs_rows.as_array().unwrap().len(), 1);
+
+    // A non-terminal ack leaves the ask open: read, but still awaiting_me.
+    run(&bus, &["ack", "bob", &mid, "--status", "working"]);
+    let inbox = run(&bus, &["inbox", "bob", "--json"]);
+    let msg = serde_json::from_slice::<serde_json::Value>(&inbox.stdout).unwrap()
+        .as_array()
+        .unwrap()[0]
+        .clone();
+    assert_eq!(msg["unread"], false);
+    assert_eq!(msg["awaiting_me"], true);
+    assert_eq!(msg["my_status"], "working");
+
+    // A terminal ack closes the ask: awaiting_me clears.
+    run(&bus, &["ack", "bob", &mid, "--status", "done"]);
+    let inbox = run(&bus, &["inbox", "bob", "--json"]);
+    let msg = serde_json::from_slice::<serde_json::Value>(&inbox.stdout).unwrap()
+        .as_array()
+        .unwrap()[0]
+        .clone();
+    assert_eq!(msg["awaiting_me"], false);
+    assert_eq!(msg["my_status"], "done");
+
+    // Nothing left to act on.
+    let needs = run(&bus, &["inbox", "bob", "--needs-action", "--json"]);
+    let needs_rows: serde_json::Value = serde_json::from_slice(&needs.stdout).unwrap();
+    assert!(needs_rows.as_array().unwrap().is_empty());
+
+    // The sender never awaits their own message and has no status on it.
+    let inbox = run(&bus, &["inbox", "alice", "--json"]);
+    let msg = serde_json::from_slice::<serde_json::Value>(&inbox.stdout).unwrap()
+        .as_array()
+        .unwrap()[0]
+        .clone();
+    assert_eq!(msg["awaiting_me"], false);
+    assert_eq!(msg["my_status"], serde_json::Value::Null);
+}
