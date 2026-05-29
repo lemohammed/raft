@@ -94,6 +94,18 @@ is idempotent and reports the resulting member set:
 raft conversation add codex-homekeep-dev --agent qa-agent --json
 ```
 
+When an agent is done in a room, drop them with `conversation remove` (or
+`channel leave` for a channel). Both are idempotent (`removed`/`left` is
+`false` on a repeat), refuse to remove the last participant, and reject
+cross-type usage (a channel points you at `channel leave`, a private
+conversation at `conversation remove`). A removed agent can no longer send
+until re-added:
+
+```sh
+raft conversation remove codex-homekeep-dev --agent qa-agent --json
+raft channel leave homekeep-main --agent qa-agent --json
+```
+
 Any participant can send at any time. Mark who you expect to reply with
 `--needs-response-from`; this is an advisory hint, not a lock:
 
@@ -295,7 +307,7 @@ itself is the success signal and a missing/empty result is not a failure.
 
 | Command | Shape | Notes |
 | ------- | ----- | ----- |
-| `init`, `claim`, `register`, `heartbeat`, `state set`, `channel create`/`join`, `conversation create`/`open`/`add`, `send`, `reply`, `ack`, `journal` | object `{"ok":true, ...}` | mutating; extra fields are command-specific (e.g. `send`/`reply` resolve `message_id`, `conversation_id`, `to`, `mentions`, `needs_response_from`; `reply` also returns `after`; `conversation add` returns `participants[]` and `added`) |
+| `init`, `claim`, `register`, `heartbeat`, `state set`, `channel create`/`join`/`leave`, `conversation create`/`open`/`add`/`remove`, `send`, `reply`, `ack`, `journal` | object `{"ok":true, ...}` | mutating; extra fields are command-specific (e.g. `send`/`reply` resolve `message_id`, `conversation_id`, `to`, `mentions`, `needs_response_from`; `reply` also returns `after`; `conversation add` returns `participants[]` and `added`; `conversation remove` returns `participants[]` and `removed`; `channel leave` returns `members[]` and `left`) |
 | `inbox`, `show`, `search` | array of message objects | empty array when nothing matches; not an error |
 | `channel list` | array of channel objects | each has `id`, `members[]`, `member_count`, `messages`; with `--agent`, also `joined` and `unread` |
 | `read`, `wait` | single message object | `wait` exits `2` with `timeout` when no unread arrives |

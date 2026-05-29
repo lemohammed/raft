@@ -11,6 +11,18 @@ shell out to `raft` can branch on results reliably.
 
 ### Added
 
+- `conversation remove <id> --agent <name>` and `channel leave <ch> --agent
+  <name>`: the lifecycle counterpart to `conversation add`/`channel join`.
+  Until now a participant set could only grow — an agent that finished its part
+  of a room stayed listed forever, kept appearing as a valid recipient, and
+  could still send. Both commands are idempotent (`removed`/`left` is `false`
+  on a repeat), refuse to remove the last participant (which would orphan the
+  room), and reject cross-type usage (`channel leave` on a private conversation
+  or `conversation remove` on a channel points the caller at the right
+  command). A removed agent can no longer `send`/`reply` until re-added. They
+  write a system message recording the departure and support `--json`
+  (`conversation remove` returns `removed` + `participants`; `channel leave`
+  returns `left` + `members`).
 - `not_found` errors for a mistyped conversation or channel id now carry
   nearest-match `suggestions` (by edit distance, closest first, capped at three
   and omitted when nothing is close), so a typo'd `send`, `channel join`, or

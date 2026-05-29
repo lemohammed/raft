@@ -218,8 +218,22 @@ pub(crate) enum ChannelCommand {
     Create(ChannelCreateArgs),
     /// Subscribe an agent to an existing channel.
     Join(ChannelJoinArgs),
+    /// Unsubscribe an agent from a channel.
+    Leave(ChannelLeaveArgs),
     /// List channels on the bus so an agent can discover ones to join.
     List(ChannelListArgs),
+}
+
+#[derive(Args)]
+pub(crate) struct ChannelLeaveArgs {
+    /// Channel to leave.
+    pub(crate) channel: String,
+    /// Agent leaving the channel.
+    #[arg(long)]
+    pub(crate) agent: String,
+    /// Emit machine-readable JSON instead of text.
+    #[arg(long)]
+    pub(crate) json: bool,
 }
 
 #[derive(Args)]
@@ -282,6 +296,8 @@ pub(crate) enum ConversationCommand {
     Open(ConversationOpenArgs),
     /// Add a participant to an existing conversation.
     Add(ConversationAddArgs),
+    /// Remove a participant from an existing conversation.
+    Remove(ConversationRemoveArgs),
 }
 
 #[derive(Args)]
@@ -289,6 +305,18 @@ pub(crate) struct ConversationAddArgs {
     /// Conversation to add the agent to.
     pub(crate) conversation: String,
     /// Agent to add as a participant.
+    #[arg(long)]
+    pub(crate) agent: String,
+    /// Emit machine-readable JSON instead of text.
+    #[arg(long)]
+    pub(crate) json: bool,
+}
+
+#[derive(Args)]
+pub(crate) struct ConversationRemoveArgs {
+    /// Conversation to remove the agent from.
+    pub(crate) conversation: String,
+    /// Agent to remove as a participant.
     #[arg(long)]
     pub(crate) agent: String,
     /// Emit machine-readable JSON instead of text.

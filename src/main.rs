@@ -94,12 +94,14 @@ fn command_wants_json(command: &Commands) -> bool {
         Commands::Channel { command } => match command {
             ChannelCommand::Create(args) => args.json,
             ChannelCommand::Join(args) => args.json,
+            ChannelCommand::Leave(args) => args.json,
             ChannelCommand::List(args) => args.json,
         },
         Commands::Conversation { command } => match command {
             ConversationCommand::Create(args) => args.json,
             ConversationCommand::Open(args) => args.json,
             ConversationCommand::Add(args) => args.json,
+            ConversationCommand::Remove(args) => args.json,
         },
         Commands::Send(args) => args.json,
         Commands::Reply(args) => args.json,
@@ -135,12 +137,14 @@ fn run(root: PathBuf, command: Commands) -> Result<()> {
         Commands::Channel { command } => match command {
             ChannelCommand::Create(args) => cmd_channel_create(&root, args),
             ChannelCommand::Join(args) => cmd_channel_join(&root, args),
+            ChannelCommand::Leave(args) => cmd_channel_leave(&root, args),
             ChannelCommand::List(args) => cmd_channel_list(&root, args),
         },
         Commands::Conversation { command } => match command {
             ConversationCommand::Create(args) => cmd_conversation_create(&root, args),
             ConversationCommand::Open(args) => cmd_conversation_open(&root, args),
             ConversationCommand::Add(args) => cmd_conversation_add(&root, args),
+            ConversationCommand::Remove(args) => cmd_conversation_remove(&root, args),
         },
         Commands::Send(args) => cmd_send(&root, args),
         Commands::Reply(args) => cmd_reply(&root, args),
@@ -932,6 +936,117 @@ fn cmd_conversation_add(root: &Path, args: ConversationAddArgs) -> Result<()> {
         println!("@{agent_id} is already a participant in {conversation_id}");
     } else {
         println!("@{agent_id} added to conversation {conversation_id}");
+    }
+    Ok(())
+}
+
+struct ParticipantRemoval {
+    conversation_id: String,
+    agent_id: String,
+    removed: bool,
+    participants: Vec<String>,
+}
+
+/// Shared body for `conversation remove` and `channel leave`: drop a participant
+/// from an existing room. Idempotent — removing an agent that is not a member
+/// reports `removed: false` and leaves the member set untouched. Refuses to
+/// remove the last remaining participant so a room is never orphaned.
+fn remove_participant(
+    root: &Path,
+    id: &str,
+    agent: &str,
+    want_channel: bool,
+) -> Result<ParticipantRemoval> {
+    let noun = if want_channel { "channel" } else { "conversation" };
+    let conversation_id = validate_id(id, "conversation id")?;
+    let agent_id = validate_id(agent, "agent id")?;
+    ensure_root(root)?;
+    let _lock = DirLock::acquire(
+        root,
+        &format!("conversation-{conversation_id}"),
+        LOCK_TTL_SECONDS,
+        LOCK_TIMEOUT_SECONDS,
+    )?;
+    let conv = conversation_path(root, &conversation_id)?;
+    let mut meta: Meta = read_json(&conv.join("meta.json"))?
+        .ok_or_else(|| conversation_not_found(root, &conversation_id, noun))?;
+    if want_channel && !meta.channel {
+        bail!("{conversation_id:?} is not a channel; use `raft conversation remove` instead");
+    }
+    if !want_channel && meta.channel {
+        bail!("{conversation_id:?} is a channel; use `raft channel leave` instead");
+    }
+    let position = meta
+        .participants
+        .iter()
+        .position(|participant| participant == &agent_id);
+    let removed = if let Some(index) = position {
+        if meta.participants.len() <= 1 {
+            bail!("cannot remove the last participant from {conversation_id:?}");
+        }
+        meta.participants.remove(index);
+        meta.updated_at = iso_now();
+        atomic_write_json(&conv.join("meta.json"), &meta)?;
+        let (verb, subject) = if want_channel {
+            (format!("@{agent_id} left channel {conversation_id}."), "channel left")
+        } else {
+            (
+                format!("@{agent_id} removed from conversation {conversation_id}."),
+                "participant removed",
+            )
+        };
+        write_system_message(&conv, &conversation_id, meta.participants.clone(), verb, subject)?;
+        true
+    } else {
+        false
+    };
+    Ok(ParticipantRemoval {
+        conversation_id,
+        agent_id,
+        removed,
+        participants: meta.participants,
+    })
+}
+
+fn cmd_conversation_remove(root: &Path, args: ConversationRemoveArgs) -> Result<()> {
+    let result = remove_participant(root, &args.conversation, &args.agent, false)?;
+    if args.json {
+        emit_ok(serde_json::json!({
+            "conversation_id": result.conversation_id,
+            "agent": result.agent_id,
+            "removed": result.removed,
+            "participants": result.participants,
+        }))?;
+    } else if result.removed {
+        println!(
+            "@{} removed from conversation {}",
+            result.agent_id, result.conversation_id
+        );
+    } else {
+        println!(
+            "@{} is not a participant in {}",
+            result.agent_id, result.conversation_id
+        );
+    }
+    Ok(())
+}
+
+fn cmd_channel_leave(root: &Path, args: ChannelLeaveArgs) -> Result<()> {
+    let result = remove_participant(root, &args.channel, &args.agent, true)?;
+    if args.json {
+        emit_ok(serde_json::json!({
+            "channel": result.conversation_id,
+            "agent": result.agent_id,
+            "left": result.removed,
+            "members": result.participants,
+        }))?;
+    } else if result.removed {
+        println!("@{} left channel {}", result.agent_id, result.conversation_id);
+    } else {
+        println!(
+            "@{} is not subscribed to channel {}",
+            result.agent_id, result.conversation_id
+        );
     }
     Ok(())
 }

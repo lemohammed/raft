@@ -2765,3 +2765,110 @@ fn not_found_suggests_nearest_conversation_id() {
     assert_eq!(far_json["error"]["code"], "not_found");
     assert!(far_json["error"]["suggestions"].is_null());
 }
+
+#[test]
+fn conversation_remove_drops_a_participant_and_blocks_their_sends() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(&bus, &["claim", "alice", "--workspace", "."]);
+    run(&bus, &["claim", "bob", "--workspace", "."]);
+    run(&bus, &["claim", "carol", "--workspace", "."]);
+    run(
+        &bus,
+        &[
+            "conversation", "create", "proj", "--participants", "alice,bob,carol",
+            "--starter", "alice",
+        ],
+    );
+
+    // Removing carol reports the shrunken participant set.
+    let removed = run(&bus, &["conversation", "remove", "proj", "--agent", "carol", "--json"]);
+    let removed_json: serde_json::Value = serde_json::from_slice(&removed.stdout).unwrap();
+    assert_eq!(removed_json["ok"], true);
+    assert_eq!(removed_json["removed"], true);
+    let participants: Vec<&str> = removed_json["participants"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p.as_str().unwrap())
+        .collect();
+    assert!(!participants.contains(&"carol"));
+
+    // Carol can no longer send to the conversation.
+    let blocked = run_fail(
+        &bus,
+        &[
+            "send", "--conversation", "proj", "--from", "carol", "--to", "alice",
+            "--subject", "x", "--body", "y", "--json",
+        ],
+    );
+    let blocked_json: serde_json::Value = serde_json::from_slice(&blocked.stderr).unwrap();
+    assert_eq!(blocked_json["error"]["code"], "not_participant");
+
+    // Re-removing is idempotent.
+    let again = run(&bus, &["conversation", "remove", "proj", "--agent", "carol", "--json"]);
+    let again_json: serde_json::Value = serde_json::from_slice(&again.stdout).unwrap();
+    assert_eq!(again_json["removed"], false);
+
+    // Removing the last remaining participant is refused.
+    run(&bus, &["conversation", "remove", "proj", "--agent", "bob", "--json"]);
+    let last = run_fail(&bus, &["conversation", "remove", "proj", "--agent", "alice", "--json"]);
+    let last_json: serde_json::Value = serde_json::from_slice(&last.stderr).unwrap();
+    assert!(
+        last_json["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("last participant")
+    );
+}
+
+#[test]
+fn channel_leave_unsubscribes_an_agent() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(&bus, &["claim", "alice", "--workspace", "."]);
+    run(&bus, &["claim", "bob", "--workspace", "."]);
+    run(
+        &bus,
+        &["channel", "create", "room", "--creator", "alice", "--members", "bob"],
+    );
+
+    let left = run(&bus, &["channel", "leave", "room", "--agent", "bob", "--json"]);
+    let left_json: serde_json::Value = serde_json::from_slice(&left.stdout).unwrap();
+    assert_eq!(left_json["left"], true);
+    let members: Vec<&str> = left_json["members"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m.as_str().unwrap())
+        .collect();
+    assert_eq!(members, vec!["alice"]);
+
+    // channel list reflects the smaller membership.
+    let list = run(&bus, &["channel", "list", "--json"]);
+    let list_json: serde_json::Value = serde_json::from_slice(&list.stdout).unwrap();
+    let room = list_json
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["id"] == "room")
+        .unwrap();
+    assert_eq!(room["member_count"], 1);
+
+    // Leaving a conversation via `channel leave` is rejected.
+    run(
+        &bus,
+        &[
+            "conversation", "create", "side", "--participants", "alice,bob",
+            "--starter", "alice",
+        ],
+    );
+    let wrong = run_fail(&bus, &["channel", "leave", "side", "--agent", "bob", "--json"]);
+    let wrong_json: serde_json::Value = serde_json::from_slice(&wrong.stderr).unwrap();
+    assert!(
+        wrong_json["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("conversation remove")
+    );
+}
