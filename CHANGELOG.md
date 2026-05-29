@@ -11,6 +11,13 @@ shell out to `raft` can branch on results reliably.
 
 ### Added
 
+- `reply <message-id>`: respond to a message without restating its context.
+  It inherits the parent's conversation, threads the response (`after` points at
+  the parent), inherits the subject, and defaults the recipient to the original
+  sender — overridable via `--to`/`--subject`. Replaces the three-flag
+  `send --conversation … --to … --after …` dance that replying previously
+  required. Supports `--requires-ack`, `--needs-response-from`, and `--json`
+  (the envelope adds `after`).
 - `roster` now reports each agent's advertised `capabilities`, and a
   `--capability <tag>` filter narrows the roster to agents offering a given
   skill — so an agent can discover a live peer to delegate to without dumping

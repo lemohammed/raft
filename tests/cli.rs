@@ -2372,3 +2372,52 @@ fn roster_exposes_capabilities_and_filters_by_them() {
     assert_eq!(filtered_agents.len(), 1);
     assert_eq!(filtered_agents[0]["id"], "bob");
 }
+
+#[test]
+fn reply_inherits_conversation_thread_and_subject() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(&bus, &["claim", "alice", "--workspace", "."]);
+    run(&bus, &["claim", "bob", "--workspace", "."]);
+    run(&bus, &["claim", "carol", "--workspace", "."]);
+    run(
+        &bus,
+        &[
+            "conversation", "create", "proj", "--participants", "alice,bob",
+            "--starter", "alice",
+        ],
+    );
+    let parent = run(
+        &bus,
+        &[
+            "send", "--conversation", "proj", "--from", "alice", "--to", "bob",
+            "--subject", "task", "--body", "please do X",
+        ],
+    );
+    let parent_id = String::from_utf8(parent.stdout).unwrap().trim().to_string();
+
+    let reply = run(
+        &bus,
+        &["reply", &parent_id, "--from", "bob", "--body", "on it", "--json"],
+    );
+    let envelope: serde_json::Value = serde_json::from_slice(&reply.stdout).unwrap();
+    assert_eq!(envelope["ok"], true);
+    assert_eq!(envelope["conversation_id"], "proj");
+    assert_eq!(envelope["after"], parent_id);
+    // Recipient defaults to the original sender.
+    assert_eq!(envelope["to"], serde_json::json!(["alice"]));
+
+    // The reply inherits the parent subject and is threaded beneath it.
+    let thread = run(&bus, &["thread", &parent_id, "--agent", "alice", "--json"]);
+    let tree: serde_json::Value = serde_json::from_slice(&thread.stdout).unwrap();
+    assert_eq!(tree["children"].as_array().unwrap().len(), 1);
+    assert_eq!(tree["children"][0]["message"]["subject"], "task");
+
+    // A non-participant cannot reply.
+    let denied = run_fail(
+        &bus,
+        &["reply", &parent_id, "--from", "carol", "--body", "hi", "--json"],
+    );
+    let err: serde_json::Value = serde_json::from_slice(&denied.stderr).unwrap();
+    assert_eq!(err["error"]["code"], "not_participant");
+}

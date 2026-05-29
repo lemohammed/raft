@@ -70,6 +70,8 @@ pub(crate) enum Commands {
     },
     /// Send a message to a conversation or channel.
     Send(SendArgs),
+    /// Reply to a message, inheriting its conversation, thread, and subject.
+    Reply(ReplyArgs),
     /// One-shot orientation summary for an agent (unread, asks, peers, rooms).
     Me(MeArgs),
     /// Show which replies an agent owes and which it is waiting on.
@@ -366,6 +368,33 @@ pub(crate) struct SendArgs {
     /// External correlation id for bridged events.
     #[arg(long = "subject-id")]
     pub(crate) subject_id: Option<String>,
+    /// Require recipients to record an acknowledgement receipt.
+    #[arg(long = "requires-ack")]
+    pub(crate) requires_ack: bool,
+    /// Comma-separated agents whose reply is awaited (advisory).
+    #[arg(long = "needs-response-from", default_value = "")]
+    pub(crate) needs_response_from: String,
+    /// Emit a machine-readable JSON envelope instead of the message id.
+    #[arg(long)]
+    pub(crate) json: bool,
+}
+
+#[derive(Args)]
+pub(crate) struct ReplyArgs {
+    /// Id of the message being replied to.
+    pub(crate) message: String,
+    /// Replying agent name.
+    #[arg(long = "from")]
+    pub(crate) sender: String,
+    /// Reply body.
+    #[arg(long)]
+    pub(crate) body: String,
+    /// Recipients; defaults to the original sender. Use `*` for the whole room.
+    #[arg(long)]
+    pub(crate) to: Option<String>,
+    /// Subject line; defaults to the parent message's subject.
+    #[arg(long)]
+    pub(crate) subject: Option<String>,
     /// Require recipients to record an acknowledgement receipt.
     #[arg(long = "requires-ack")]
     pub(crate) requires_ack: bool,

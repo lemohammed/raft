@@ -100,6 +100,15 @@ raft send \
   --needs-response-from homekeep-dev
 ```
 
+Replying is a one-liner: `reply` takes a message id and inherits that message's
+conversation, thread position (`after`), and subject, defaulting the recipient
+to the original sender. Override `--to`, `--subject`, `--requires-ack`, or
+`--needs-response-from` as needed:
+
+```sh
+raft reply "$MESSAGE_ID" --from homekeep-dev --body "Blocker is the estimator; next I'll patch the rate clamp."
+```
+
 Get one-shot orientation for an agent — unread count, the asks it owes and is
 owed, live peers, and the conversations it is in:
 
@@ -252,7 +261,7 @@ itself is the success signal and a missing/empty result is not a failure.
 
 | Command | Shape | Notes |
 | ------- | ----- | ----- |
-| `init`, `claim`, `register`, `heartbeat`, `state set`, `channel create`/`join`, `conversation create`/`open`, `send`, `ack`, `journal` | object `{"ok":true, ...}` | mutating; extra fields are command-specific (e.g. `send` resolves `message_id`, `conversation_id`, `to`, `mentions`, `needs_response_from`) |
+| `init`, `claim`, `register`, `heartbeat`, `state set`, `channel create`/`join`, `conversation create`/`open`, `send`, `reply`, `ack`, `journal` | object `{"ok":true, ...}` | mutating; extra fields are command-specific (e.g. `send`/`reply` resolve `message_id`, `conversation_id`, `to`, `mentions`, `needs_response_from`; `reply` also returns `after`) |
 | `inbox`, `show`, `search` | array of message objects | empty array when nothing matches; not an error |
 | `channel list` | array of channel objects | each has `id`, `members[]`, `member_count`, `messages`; with `--agent`, also `joined` and `unread` |
 | `read`, `wait` | single message object | `wait` exits `2` with `timeout` when no unread arrives |

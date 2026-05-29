@@ -95,6 +95,7 @@ fn command_wants_json(command: &Commands) -> bool {
             ConversationCommand::Open(args) => args.json,
         },
         Commands::Send(args) => args.json,
+        Commands::Reply(args) => args.json,
         Commands::Me(args) => args.json,
         Commands::Awaiting(args) => args.json,
         Commands::Roster(args) => args.json,
@@ -134,6 +135,7 @@ fn run(root: PathBuf, command: Commands) -> Result<()> {
             ConversationCommand::Open(args) => cmd_conversation_open(&root, args),
         },
         Commands::Send(args) => cmd_send(&root, args),
+        Commands::Reply(args) => cmd_reply(&root, args),
         Commands::Me(args) => cmd_me(&root, args),
         Commands::Awaiting(args) => cmd_awaiting(&root, args),
         Commands::Roster(args) => cmd_roster(&root, args),
@@ -909,6 +911,46 @@ fn cmd_send(root: &Path, args: SendArgs) -> Result<()> {
                 "to": message.to,
                 "mentions": message.mentions,
                 "needs_response_from": message.needs_response_from,
+            }))?
+        );
+    } else {
+        println!("{}", message.id);
+    }
+    Ok(())
+}
+
+fn cmd_reply(root: &Path, args: ReplyArgs) -> Result<()> {
+    ensure_root(root)?;
+    let (_, parent) = find_message(root, &args.message)?;
+    let json = args.json;
+    let to = args.to.unwrap_or_else(|| parent.from.clone());
+    let subject = args.subject.unwrap_or_else(|| parent.subject.clone());
+    let message = send_message(
+        root,
+        SendMessageInput {
+            conversation_id: parent.conversation_id.clone(),
+            sender: args.sender,
+            to,
+            subject,
+            body: args.body,
+            kind: "message".to_string(),
+            after: Some(parent.id.clone()),
+            subject_id: None,
+            requires_ack: args.requires_ack,
+            needs_response_from: args.needs_response_from,
+        },
+    )?;
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "ok": true,
+                "message_id": message.id,
+                "conversation_id": message.conversation_id,
+                "to": message.to,
+                "mentions": message.mentions,
+                "needs_response_from": message.needs_response_from,
+                "after": message.after,
             }))?
         );
     } else {
