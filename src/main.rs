@@ -3332,6 +3332,31 @@ fn write_receipt(
     Ok(())
 }
 
+/// True when `message` is an open ask not yet discharged by every awaited agent
+/// — at least one awaited agent lacks a terminal (`done`/`rejected`) receipt.
+/// Every obligation view (`awaiting`/`me`/`roster`/`wait`) and the `ack`/
+/// `withdraw` mutators scan only the live `messages/` dir, so archiving such a
+/// message would silently vanish the obligation with no terminal receipt and no
+/// withdrawal — stranding the worker's queue and falsely clearing the asker.
+/// A withdrawn ask reads as resolved (`message_awaited` returns empty), so it
+/// archives normally.
+fn message_is_unresolved_ask(conv: &Path, message: &Message, meta: &Meta) -> Result<bool> {
+    let awaited = message_awaited(message, meta);
+    if awaited.is_empty() {
+        return Ok(false);
+    }
+    let receipts = conv.join("receipts").join(&message.id);
+    for who in awaited {
+        let terminal = read_json::<Receipt>(&receipts.join(format!("{who}.json")))?
+            .map(|receipt| ask_is_terminal(&receipt.status))
+            .unwrap_or(false);
+        if !terminal {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 fn archive_old_messages(_root: &Path, conv: &Path, meta: &Meta) -> Result<usize> {
     let cutoff = Utc::now() - TimeDelta::days(meta.retention_days as i64);
     let archive_dir = conv
@@ -3350,6 +3375,11 @@ fn archive_old_messages(_root: &Path, conv: &Path, meta: &Meta) -> Result<usize>
         };
         let created_at = parse_time(&message.created_at).unwrap_or_else(|_| Utc::now());
         if created_at >= cutoff {
+            continue;
+        }
+        // Retain an unresolved obligation past its retention window rather than
+        // archive it into invisibility; `withdraw` releases it so it can age out.
+        if message_is_unresolved_ask(conv, &message, meta)? {
             continue;
         }
         fs::create_dir_all(&archive_dir)?;

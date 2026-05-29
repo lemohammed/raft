@@ -2107,6 +2107,62 @@ fn gc_archive_moves_receipts_with_message() {
 }
 
 #[test]
+fn gc_archive_retains_an_unresolved_open_ask_until_it_is_discharged() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(
+        &bus,
+        &[
+            "conversation", "create", "c", "--participants", "a,b", "--starter", "a",
+            "--retention-days", "1",
+        ],
+    );
+    let sent = run(
+        &bus,
+        &[
+            "send", "--conversation", "c", "--from", "a", "--to", "b",
+            "--body", "deploy?", "--requires-ack",
+        ],
+    );
+    let message_id = String::from_utf8_lossy(&sent.stdout).trim().to_string();
+
+    // Age the ask well past its retention window without resolving it. The join
+    // baseline is pushed even earlier so the ask still post-dates b's
+    // membership (otherwise the membership filter would drop b on its own).
+    let meta_path = bus.join("conversations/c/meta.json");
+    let mut meta: serde_json::Value =
+        serde_json::from_slice(&fs::read(&meta_path).unwrap()).unwrap();
+    meta["joined_at"]["a"] = serde_json::json!("1999-01-01T00:00:00Z");
+    meta["joined_at"]["b"] = serde_json::json!("1999-01-01T00:00:00Z");
+    fs::write(&meta_path, serde_json::to_vec(&meta).unwrap()).unwrap();
+
+    let message_path = bus.join(format!("conversations/c/messages/{message_id}.json"));
+    let mut message: serde_json::Value =
+        serde_json::from_slice(&fs::read(&message_path).unwrap()).unwrap();
+    message["created_at"] = serde_json::Value::String("2000-01-01T00:00:00Z".to_string());
+    fs::write(&message_path, serde_json::to_vec(&message).unwrap()).unwrap();
+
+    // Archival must not vanish a live obligation: the message stays put and the
+    // worker still owes it.
+    run(&bus, &["gc", "--archive"]);
+    assert!(
+        message_path.exists(),
+        "an unresolved open ask must not be archived out of every obligation view"
+    );
+    assert!(!bus.join(format!("archive/c/{message_id}.json")).exists());
+    let owes = run(&bus, &["awaiting", "b", "--json"]);
+    let owes_json: serde_json::Value = serde_json::from_slice(&owes.stdout).unwrap();
+    assert_eq!(owes_json["you_owe"][0]["message_id"], message_id);
+
+    // Once b discharges it with a terminal ack, the same gc run archives it.
+    run(&bus, &["read", "b", &message_id]);
+    run(&bus, &["ack", "b", &message_id, "--status", "done"]);
+    run(&bus, &["gc", "--archive"]);
+    assert!(!message_path.exists(), "a resolved ask should archive normally");
+    assert!(bus.join(format!("archive/c/{message_id}.json")).exists());
+}
+
+#[test]
 fn doctor_reports_healthy_bus_as_ok() {
     let bus = temp_bus();
     run(&bus, &["init"]);

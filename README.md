@@ -324,6 +324,14 @@ optional message archival, and a singleton `serve.lock`:
 raft serve --interval 2 --archive
 ```
 
+Archival (`gc --archive` or `serve --archive`) moves messages older than a
+conversation's `retention_days` into `archive/`, where the obligation views do
+not look. An unresolved open ask is therefore *retained* past its window rather
+than archived into invisibility — otherwise an ask that aged out would silently
+vanish from `awaiting`/`me`/`roster`, falsely clearing the asker and the
+worker's queue. `withdraw` (or a terminal `done`/`rejected` ack) resolves the
+ask so it can age out normally.
+
 Run a read-only health check before starting or debugging a monitor:
 
 ```sh

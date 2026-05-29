@@ -11,6 +11,16 @@ shell out to `raft` can branch on results reliably.
 
 ### Fixed
 
+- `gc --archive` (and `serve --archive`) no longer archives an unresolved open
+  ask out of every obligation view. Archival moved any message older than
+  `retention_days` (default 14) into `archive/`, filtering on age alone — but
+  the obligation views (`awaiting`/`me`/`roster`/`wait`) and the `ack`/
+  `withdraw` mutators scan only the live `messages/` dir. So an ask that aged
+  out before its awaited agents acked silently vanished: the worker's queue
+  cleared, the asker's `owed_to_you`/`wait --owed` reported nothing owed (a
+  false "resolved" signal), and `ack`/`withdraw` returned `not_found`. Archival
+  now retains a message while it is still an open ask (any awaited agent lacks a
+  terminal receipt); `withdraw` or a terminal ack lets it age out normally.
 - A message that set both `--needs-response-from` and `--requires-ack` silently
   dropped the ack requirement: `message_awaited` picked exactly one source via
   `if/else if`, so a non-empty `needs_response_from` suppressed `requires_ack`
