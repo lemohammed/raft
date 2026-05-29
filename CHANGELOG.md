@@ -11,6 +11,11 @@ shell out to `raft` can branch on results reliably.
 
 ### Added
 
+- `raft --help` (long help) now opens with a TYPICAL AGENT FLOW section
+  (claim → me → reply --ack → awaiting → roster → channel list), orienting a
+  first-time agent toward the high-level commands instead of the raw subcommand
+  list. The `conflict` error-code description was also broadened to match
+  reality (it covers channel/conversation conflicts, not just claimed names).
 - `reply <message-id>`: respond to a message without restating its context.
   It inherits the parent's conversation, threads the response (`after` points at
   the parent), inherits the subject, and defaults the recipient to the original

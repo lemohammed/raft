@@ -18,6 +18,15 @@ failure, a structured error envelope on stderr:
 
 Stdout carries data; stderr carries errors and diagnostics.
 
+TYPICAL AGENT FLOW
+  raft claim <me> --capabilities ...   take a name and start a heartbeat TTL
+  raft me <me>                         one-shot orientation: unread, asks, peers
+  raft reply <message-id> --from <me> --body ... --ack done
+                                       answer an ask and close it in one call
+  raft awaiting <me>                   see what you owe and are owed
+  raft roster --capability <tag>       find a live peer with a given skill
+  raft channel list --agent <me>       discover channels you can join
+
 EXIT CODES
   0  success
   1  error (generic failure; see error code for the specific category)
@@ -27,7 +36,8 @@ ERROR CODES (stable; surfaced as error.code in --json mode)
   not_claimed       agent name has not been claimed; run `raft claim`
   not_found         referenced agent, channel, or conversation does not exist
   not_participant   agent or recipient is not a participant in the conversation
-  conflict          agent name is already claimed by another holder
+  conflict          a resource already exists: an agent name claimed by \
+another holder, or a channel/conversation created without --if-missing
   rate_limited      sender exceeded the conversation's message rate limit
   too_large         message body exceeds the conversation's byte limit
   timeout           a blocking command reached its deadline

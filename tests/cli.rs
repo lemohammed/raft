@@ -2485,3 +2485,20 @@ fn reply_with_ack_closes_the_open_ask() {
         .count();
     assert_eq!(before_count, after_count, "bad ack status must not send a reply");
 }
+
+#[test]
+fn long_help_documents_the_agent_flow() {
+    let output = Command::new(bin()).arg("--help").output().unwrap();
+    assert!(output.status.success());
+    let help = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        help.contains("TYPICAL AGENT FLOW"),
+        "long help should orient an agent with a typical flow"
+    );
+    // The conflict code description must cover channels/conversations, not just
+    // a claimed agent name.
+    assert!(
+        help.contains("channel/conversation"),
+        "conflict code help should mention channel/conversation conflicts"
+    );
+}
