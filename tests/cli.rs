@@ -2502,3 +2502,72 @@ fn long_help_documents_the_agent_flow() {
         "conflict code help should mention channel/conversation conflicts"
     );
 }
+
+#[test]
+fn awaiting_closes_each_recipient_independently() {
+    // A single ask naming two awaited agents must close per recipient: one
+    // agent recording a terminal receipt closes its own owed ask without
+    // touching the other's, and the sender stays owed until both answer.
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(&bus, &["claim", "alice", "--workspace", "."]);
+    run(&bus, &["claim", "bob", "--workspace", "."]);
+    run(&bus, &["claim", "carol", "--workspace", "."]);
+    run(
+        &bus,
+        &[
+            "conversation", "create", "proj", "--participants", "alice,bob,carol",
+            "--starter", "alice",
+        ],
+    );
+    let sent = run(
+        &bus,
+        &[
+            "send", "--conversation", "proj", "--from", "alice",
+            "--to", "bob,carol", "--subject", "need both",
+            "--body", "please respond", "--needs-response-from", "bob,carol",
+        ],
+    );
+    let message_id = String::from_utf8_lossy(&sent.stdout).trim().to_string();
+
+    // Both awaited agents owe; the sender is owed two responses.
+    let bob_before = run(&bus, &["awaiting", "bob", "--json"]);
+    let bob_before_json: serde_json::Value = serde_json::from_slice(&bob_before.stdout).unwrap();
+    assert_eq!(bob_before_json["you_owe"].as_array().unwrap().len(), 1);
+    let carol_before = run(&bus, &["awaiting", "carol", "--json"]);
+    let carol_before_json: serde_json::Value =
+        serde_json::from_slice(&carol_before.stdout).unwrap();
+    assert_eq!(carol_before_json["you_owe"].as_array().unwrap().len(), 1);
+    // The sender is owed one response per awaited recipient, and each entry
+    // names which agent is awaited so the sender can tell them apart.
+    let alice_before = run(&bus, &["awaiting", "alice", "--json"]);
+    let alice_before_json: serde_json::Value =
+        serde_json::from_slice(&alice_before.stdout).unwrap();
+    let owed_before = alice_before_json["owed_to_you"].as_array().unwrap();
+    assert_eq!(owed_before.len(), 2);
+    let mut awaited_before: Vec<&str> = owed_before
+        .iter()
+        .map(|e| e["awaited"].as_str().unwrap())
+        .collect();
+    awaited_before.sort();
+    assert_eq!(awaited_before, vec!["bob", "carol"]);
+
+    // Bob records a terminal receipt; carol does not.
+    run(&bus, &["read", "bob", &message_id]);
+    run(&bus, &["ack", "bob", &message_id, "--status", "done"]);
+
+    // Bob's ask is closed; carol's remains open; the sender is still owed.
+    let bob_after = run(&bus, &["awaiting", "bob", "--json"]);
+    let bob_after_json: serde_json::Value = serde_json::from_slice(&bob_after.stdout).unwrap();
+    assert!(bob_after_json["you_owe"].as_array().unwrap().is_empty());
+    let carol_after = run(&bus, &["awaiting", "carol", "--json"]);
+    let carol_after_json: serde_json::Value =
+        serde_json::from_slice(&carol_after.stdout).unwrap();
+    assert_eq!(carol_after_json["you_owe"].as_array().unwrap().len(), 1);
+    let alice_after = run(&bus, &["awaiting", "alice", "--json"]);
+    let alice_after_json: serde_json::Value =
+        serde_json::from_slice(&alice_after.stdout).unwrap();
+    let owed_after = alice_after_json["owed_to_you"].as_array().unwrap();
+    assert_eq!(owed_after.len(), 1);
+    assert_eq!(owed_after[0]["awaited"], "carol");
+}
