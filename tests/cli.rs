@@ -1,4 +1,3 @@
-use chrono::{DateTime, SecondsFormat, TimeDelta, Utc};
 use std::fs;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -26,10 +25,6 @@ fn temp_bus() -> PathBuf {
     ));
     fs::create_dir_all(&path).unwrap();
     path.join("bus")
-}
-
-fn iso_test_after(seconds: i64) -> String {
-    (Utc::now() + TimeDelta::seconds(seconds)).to_rfc3339_opts(SecondsFormat::Secs, true)
 }
 
 fn run(root: &PathBuf, args: &[&str]) -> std::process::Output {
@@ -65,7 +60,7 @@ fn run_fail(root: &PathBuf, args: &[&str]) -> std::process::Output {
 }
 
 #[test]
-fn private_turn_message_ack_flow() {
+fn private_message_ack_flow() {
     let bus = temp_bus();
     run(&bus, &["init"]);
     run(&bus, &["claim", "codex", "--workspace", "."]);
@@ -98,8 +93,6 @@ fn private_turn_message_ack_flow() {
             "--body",
             "please report status",
             "--requires-ack",
-            "--pass-to",
-            "homekeep-dev",
         ],
     );
     let message_id = String::from_utf8_lossy(&sent.stdout).trim().to_string();
@@ -261,7 +254,7 @@ fn state_set_get_and_watch_state_changes_work() {
 }
 
 #[test]
-fn turn_is_enforced() {
+fn any_participant_can_send_without_turn() {
     let bus = temp_bus();
     run(&bus, &["init"]);
     run(
@@ -276,7 +269,8 @@ fn turn_is_enforced() {
             "a",
         ],
     );
-    let denied = run_fail(
+    // No turn gate: a non-starter participant can append at any time.
+    run(
         &bus,
         &[
             "send",
@@ -287,10 +281,11 @@ fn turn_is_enforced() {
             "--to",
             "a",
             "--body",
-            "not my turn",
+            "append anytime",
         ],
     );
-    assert!(String::from_utf8_lossy(&denied.stderr).contains("turn is held"));
+    let inbox = run(&bus, &["inbox", "a", "--unread"]);
+    assert!(String::from_utf8_lossy(&inbox.stdout).contains("append anytime"));
 }
 
 #[test]
@@ -1215,8 +1210,6 @@ fn group_conversation_and_private_side_chat_work() {
             "b,c",
             "--body",
             "group message",
-            "--pass-to",
-            "b",
         ],
     );
     let c_inbox = run(&bus, &["inbox", "c", "--unread"]);
@@ -1260,7 +1253,7 @@ fn group_conversation_and_private_side_chat_work() {
 }
 
 #[test]
-fn bridge_event_bypasses_turn_and_rates_by_subject_id() {
+fn bridge_event_rates_by_subject_id() {
     let bus = temp_bus();
     run(&bus, &["init"]);
     run(
@@ -1332,8 +1325,170 @@ fn bridge_event_bypasses_turn_and_rates_by_subject_id() {
         ],
     );
     assert!(String::from_utf8_lossy(&denied.stderr).contains("rate limited"));
-    let status = run(&bus, &["status"]);
-    assert!(String::from_utf8_lossy(&status.stdout).contains("turn=a"));
+}
+
+#[test]
+fn awaiting_tracks_open_asks_until_resolved() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(&bus, &["claim", "sender-x", "--workspace", "."]);
+    run(&bus, &["claim", "ower-y", "--workspace", "."]);
+    run(
+        &bus,
+        &[
+            "conversation",
+            "create",
+            "c",
+            "--participants",
+            "sender-x,ower-y",
+            "--starter",
+            "sender-x",
+        ],
+    );
+    let sent = run(
+        &bus,
+        &[
+            "send",
+            "--conversation",
+            "c",
+            "--from",
+            "sender-x",
+            "--to",
+            "ower-y",
+            "--subject",
+            "need answer",
+            "--body",
+            "please respond",
+            "--needs-response-from",
+            "ower-y",
+        ],
+    );
+    let message_id = String::from_utf8_lossy(&sent.stdout).trim().to_string();
+
+    // The awaited agent owes a response; the sender is waiting on one.
+    let owes = run(&bus, &["awaiting", "ower-y", "--json"]);
+    let owes_json: serde_json::Value = serde_json::from_slice(&owes.stdout).unwrap();
+    assert_eq!(owes_json["you_owe"][0]["message_id"], message_id);
+    assert_eq!(owes_json["you_owe"][0]["from"], "sender-x");
+    assert!(owes_json["owed_to_you"].as_array().unwrap().is_empty());
+
+    let waiting = run(&bus, &["awaiting", "sender-x", "--json"]);
+    let waiting_json: serde_json::Value = serde_json::from_slice(&waiting.stdout).unwrap();
+    assert_eq!(waiting_json["owed_to_you"][0]["message_id"], message_id);
+    assert!(waiting_json["you_owe"].as_array().unwrap().is_empty());
+
+    // A terminal ack from the awaited agent closes the ask for both sides.
+    run(&bus, &["read", "ower-y", &message_id]);
+    run(&bus, &["ack", "ower-y", &message_id, "--status", "done"]);
+
+    let owes_after = run(&bus, &["awaiting", "ower-y", "--json"]);
+    let owes_after_json: serde_json::Value = serde_json::from_slice(&owes_after.stdout).unwrap();
+    assert!(owes_after_json["you_owe"].as_array().unwrap().is_empty());
+
+    let waiting_after = run(&bus, &["awaiting", "sender-x", "--json"]);
+    let waiting_after_json: serde_json::Value =
+        serde_json::from_slice(&waiting_after.stdout).unwrap();
+    assert!(waiting_after_json["owed_to_you"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn requires_ack_creates_open_ask_for_recipient() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(&bus, &["claim", "sender-x", "--workspace", "."]);
+    run(&bus, &["claim", "ower-y", "--workspace", "."]);
+    run(
+        &bus,
+        &[
+            "conversation",
+            "create",
+            "c",
+            "--participants",
+            "sender-x,ower-y",
+            "--starter",
+            "sender-x",
+        ],
+    );
+    // No explicit needs-response-from, but --requires-ack implies an open ask.
+    let sent = run(
+        &bus,
+        &[
+            "send",
+            "--conversation",
+            "c",
+            "--from",
+            "sender-x",
+            "--to",
+            "ower-y",
+            "--subject",
+            "ack me",
+            "--body",
+            "please ack",
+            "--requires-ack",
+        ],
+    );
+    let message_id = String::from_utf8_lossy(&sent.stdout).trim().to_string();
+    let owes = run(&bus, &["awaiting", "ower-y", "--json"]);
+    let owes_json: serde_json::Value = serde_json::from_slice(&owes.stdout).unwrap();
+    assert_eq!(owes_json["you_owe"][0]["message_id"], message_id);
+}
+
+#[test]
+fn roster_lists_live_agents_with_presence_and_ask_counts() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(&bus, &["claim", "alpha-agent", "--workspace", "."]);
+    run(&bus, &["claim", "bravo-agent", "--workspace", "."]);
+    run(
+        &bus,
+        &["state", "set", "bravo-agent", "blocked", "--note", "stuck"],
+    );
+    run(
+        &bus,
+        &[
+            "conversation",
+            "create",
+            "c",
+            "--participants",
+            "alpha-agent,bravo-agent",
+            "--starter",
+            "alpha-agent",
+        ],
+    );
+    run(
+        &bus,
+        &[
+            "send",
+            "--conversation",
+            "c",
+            "--from",
+            "alpha-agent",
+            "--to",
+            "bravo-agent",
+            "--subject",
+            "ping",
+            "--body",
+            "respond",
+            "--needs-response-from",
+            "bravo-agent",
+        ],
+    );
+
+    let roster = run(&bus, &["roster", "--json"]);
+    let roster_json: serde_json::Value = serde_json::from_slice(&roster.stdout).unwrap();
+    let agents = roster_json["agents"].as_array().unwrap();
+    assert_eq!(agents.len(), 2);
+    // blocked sorts before idle.
+    assert_eq!(agents[0]["id"], "bravo-agent");
+    assert_eq!(agents[0]["current_state"], "blocked");
+    assert_eq!(agents[0]["owes"], 1);
+    assert_eq!(agents[0]["waiting_on"], 0);
+    let alpha = agents
+        .iter()
+        .find(|agent| agent["id"] == "alpha-agent")
+        .unwrap();
+    assert_eq!(alpha["owes"], 0);
+    assert_eq!(alpha["waiting_on"], 1);
 }
 
 #[test]
@@ -1455,8 +1610,6 @@ fn records_include_schema_versions_and_journal_entries() {
     let message_id = String::from_utf8_lossy(&sent.stdout).trim().to_string();
     let meta: serde_json::Value =
         serde_json::from_slice(&fs::read(bus.join("conversations/c/meta.json")).unwrap()).unwrap();
-    let turn: serde_json::Value =
-        serde_json::from_slice(&fs::read(bus.join("conversations/c/turn.json")).unwrap()).unwrap();
     let message: serde_json::Value = serde_json::from_slice(
         &fs::read(bus.join(format!("conversations/c/messages/{message_id}.json"))).unwrap(),
     )
@@ -1465,170 +1618,9 @@ fn records_include_schema_versions_and_journal_entries() {
         serde_json::from_slice(&fs::read(bus.join("agents/agent-a.json")).unwrap()).unwrap();
     let journal = fs::read_to_string(bus.join("journal/agent-a.jsonl")).unwrap();
     assert_eq!(meta["_v"], 1);
-    assert_eq!(turn["_v"], 1);
     assert_eq!(message["_v"], 1);
     assert_eq!(agent["_v"], 1);
     assert!(journal.contains("\"_v\":1"));
-}
-
-#[test]
-fn gc_reassigns_expired_turn() {
-    let bus = temp_bus();
-    run(&bus, &["init"]);
-    run(
-        &bus,
-        &[
-            "conversation",
-            "create",
-            "c",
-            "--participants",
-            "a,b",
-            "--starter",
-            "a",
-            "--turn-ttl",
-            "1",
-        ],
-    );
-    let turn_path = bus.join("conversations").join("c").join("turn.json");
-    let mut turn: serde_json::Value =
-        serde_json::from_slice(&fs::read(&turn_path).unwrap()).unwrap();
-    turn["expires_at"] = serde_json::Value::String("2000-01-01T00:00:00Z".to_string());
-    fs::write(&turn_path, serde_json::to_vec(&turn).unwrap()).unwrap();
-    run(&bus, &["gc"]);
-    let updated: serde_json::Value =
-        serde_json::from_slice(&fs::read(&turn_path).unwrap()).unwrap();
-    assert_eq!(updated["holder"], "b");
-}
-
-#[test]
-fn expired_holder_can_send_within_grace_without_handoff() {
-    let bus = temp_bus();
-    run(&bus, &["init"]);
-    run(
-        &bus,
-        &[
-            "conversation",
-            "create",
-            "c",
-            "--participants",
-            "a,b",
-            "--starter",
-            "a",
-            "--turn-ttl",
-            "60",
-        ],
-    );
-    let turn_path = bus.join("conversations").join("c").join("turn.json");
-    let mut turn: serde_json::Value =
-        serde_json::from_slice(&fs::read(&turn_path).unwrap()).unwrap();
-    turn["expires_at"] = serde_json::Value::String(iso_test_after(-1));
-    fs::write(&turn_path, serde_json::to_vec(&turn).unwrap()).unwrap();
-
-    run(
-        &bus,
-        &[
-            "send",
-            "--conversation",
-            "c",
-            "--from",
-            "a",
-            "--to",
-            "b",
-            "--body",
-            "inside grace",
-        ],
-    );
-
-    let updated: serde_json::Value =
-        serde_json::from_slice(&fs::read(&turn_path).unwrap()).unwrap();
-    assert_eq!(updated["holder"], "a");
-    assert_eq!(updated["counter"], 1);
-}
-
-#[test]
-fn expired_holder_after_grace_gets_explicit_error() {
-    let bus = temp_bus();
-    run(&bus, &["init"]);
-    run(
-        &bus,
-        &[
-            "conversation",
-            "create",
-            "c",
-            "--participants",
-            "a,b",
-            "--starter",
-            "a",
-            "--turn-ttl",
-            "60",
-        ],
-    );
-    let turn_path = bus.join("conversations").join("c").join("turn.json");
-    let mut turn: serde_json::Value =
-        serde_json::from_slice(&fs::read(&turn_path).unwrap()).unwrap();
-    turn["expires_at"] = serde_json::Value::String(iso_test_after(-120));
-    fs::write(&turn_path, serde_json::to_vec(&turn).unwrap()).unwrap();
-
-    let denied = run_fail(
-        &bus,
-        &[
-            "send",
-            "--conversation",
-            "c",
-            "--from",
-            "a",
-            "--to",
-            "b",
-            "--body",
-            "after grace",
-        ],
-    );
-    let stderr = String::from_utf8_lossy(&denied.stderr);
-    assert!(stderr.contains("your turn expired"));
-    assert!(stderr.contains("reassigned to b"));
-    let updated: serde_json::Value =
-        serde_json::from_slice(&fs::read(&turn_path).unwrap()).unwrap();
-    assert_eq!(updated["holder"], "b");
-    assert_eq!(updated["counter"], 2);
-}
-
-#[test]
-fn renew_turn_extends_current_holder_without_handoff() {
-    let bus = temp_bus();
-    run(&bus, &["init"]);
-    run(
-        &bus,
-        &[
-            "conversation",
-            "create",
-            "c",
-            "--participants",
-            "a,b",
-            "--starter",
-            "a",
-            "--turn-ttl",
-            "60",
-        ],
-    );
-    let turn_path = bus.join("conversations").join("c").join("turn.json");
-    let mut turn: serde_json::Value =
-        serde_json::from_slice(&fs::read(&turn_path).unwrap()).unwrap();
-    turn["expires_at"] = serde_json::Value::String(iso_test_after(5));
-    fs::write(&turn_path, serde_json::to_vec(&turn).unwrap()).unwrap();
-    let previous = DateTime::parse_from_rfc3339(turn["expires_at"].as_str().unwrap()).unwrap();
-
-    run(&bus, &["renew-turn", "--conversation", "c", "--from", "a"]);
-
-    let updated: serde_json::Value =
-        serde_json::from_slice(&fs::read(&turn_path).unwrap()).unwrap();
-    let renewed = DateTime::parse_from_rfc3339(updated["expires_at"].as_str().unwrap()).unwrap();
-    assert_eq!(updated["holder"], "a");
-    assert_eq!(updated["counter"], 1);
-    assert!(renewed > previous);
-    let denied = run_fail(&bus, &["renew-turn", "--conversation", "c", "--from", "b"]);
-    assert!(String::from_utf8_lossy(&denied.stderr).contains("turn is held by"));
-    let inbox = run(&bus, &["inbox", "b"]);
-    assert!(String::from_utf8_lossy(&inbox.stdout).contains("Turn lease renewed by a."));
 }
 
 #[test]
@@ -1751,18 +1743,18 @@ fn doctor_reports_corrupt_json_without_mutating() {
             "agent-a",
         ],
     );
-    let turn_path = bus.join("conversations/c/turn.json");
-    fs::write(&turn_path, b"{not json").unwrap();
+    let meta_path = bus.join("conversations/c/meta.json");
+    fs::write(&meta_path, b"{not json").unwrap();
 
     let doctor = run_fail(&bus, &["doctor", "--json"]);
     let report: serde_json::Value = serde_json::from_slice(&doctor.stdout).unwrap();
     assert_eq!(report["ok"], false);
     assert!(report["error_count"].as_u64().unwrap() >= 1);
     assert!(report["issues"].as_array().unwrap().iter().any(|issue| {
-        issue["code"] == "invalid_json" && issue["path"] == "conversations/c/turn.json"
+        issue["code"] == "invalid_json" && issue["path"] == "conversations/c/meta.json"
     }));
     assert!(String::from_utf8_lossy(&doctor.stderr).contains("doctor found"));
-    assert_eq!(fs::read(&turn_path).unwrap(), b"{not json");
+    assert_eq!(fs::read(&meta_path).unwrap(), b"{not json");
 }
 
 #[test]

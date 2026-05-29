@@ -21,12 +21,10 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 const DEFAULT_RATE_WINDOW_SECONDS: u64 = 60;
 const DEFAULT_RATE_MAX_MESSAGES: u64 = 10;
 const DEFAULT_MAX_MESSAGE_BYTES: usize = 32_768;
-const DEFAULT_TURN_TTL_SECONDS: u64 = 600;
 const DEFAULT_AGENT_TTL_SECONDS: u64 = 120;
 const LOCK_TTL_SECONDS: u64 = 30;
 const LOCK_TIMEOUT_SECONDS: u64 = 5;
 const SERVE_LOCK_TTL_SECONDS: u64 = 30;
-const TURN_EXPIRE_GRACE_SECONDS: i64 = 60;
 const SCHEMA_VERSION: u16 = 1;
 
 type Result<T> = std::result::Result<T, RaftError>;
@@ -63,7 +61,7 @@ macro_rules! bail {
 #[derive(Parser)]
 #[command(name = "raft")]
 #[command(version)]
-#[command(about = "Filesystem-backed agent-to-agent turn monitor.")]
+#[command(about = "Filesystem-backed agent-to-agent coordination bus.")]
 struct Cli {
     #[arg(long)]
     root: Option<PathBuf>,
@@ -91,8 +89,8 @@ enum Commands {
         command: ConversationCommand,
     },
     Send(SendArgs),
-    PassTurn(PassTurnArgs),
-    RenewTurn(RenewTurnArgs),
+    Awaiting(AwaitingArgs),
+    Roster(RosterArgs),
     Inbox(InboxArgs),
     Wait(WaitArgs),
     Watch(WatchArgs),
@@ -179,8 +177,6 @@ struct ChannelCreateArgs {
     members: String,
     #[arg(long = "if-missing")]
     if_missing: bool,
-    #[arg(long = "turn-ttl", default_value_t = DEFAULT_TURN_TTL_SECONDS)]
-    turn_ttl: u64,
     #[arg(long = "retention-days", default_value_t = 14)]
     retention_days: u64,
     #[arg(long = "rate-window", default_value_t = DEFAULT_RATE_WINDOW_SECONDS)]
@@ -215,8 +211,6 @@ struct ConversationCreateArgs {
     private: bool,
     #[arg(long = "if-missing")]
     if_missing: bool,
-    #[arg(long = "turn-ttl", default_value_t = DEFAULT_TURN_TTL_SECONDS)]
-    turn_ttl: u64,
     #[arg(long = "retention-days", default_value_t = 14)]
     retention_days: u64,
     #[arg(long = "rate-window", default_value_t = DEFAULT_RATE_WINDOW_SECONDS)]
@@ -239,8 +233,6 @@ struct ConversationOpenArgs {
     topic: String,
     #[arg(long = "if-missing")]
     if_missing: bool,
-    #[arg(long = "turn-ttl", default_value_t = DEFAULT_TURN_TTL_SECONDS)]
-    turn_ttl: u64,
     #[arg(long = "retention-days", default_value_t = 14)]
     retention_days: u64,
     #[arg(long = "rate-window", default_value_t = DEFAULT_RATE_WINDOW_SECONDS)]
@@ -273,32 +265,27 @@ struct SendArgs {
     subject_id: Option<String>,
     #[arg(long = "requires-ack")]
     requires_ack: bool,
-    #[arg(long = "pass-to")]
-    pass_to: Option<String>,
+    #[arg(long = "needs-response-from", default_value = "")]
+    needs_response_from: String,
 }
 
 #[derive(Args)]
-struct PassTurnArgs {
-    #[arg(long, conflicts_with = "channel", required_unless_present = "channel")]
+struct AwaitingArgs {
+    agent: String,
+    #[arg(long, conflicts_with = "channel")]
     conversation: Option<String>,
     #[arg(long)]
     channel: Option<String>,
-    #[arg(long = "from")]
-    sender: String,
     #[arg(long)]
-    to: String,
-    #[arg(long)]
-    force: bool,
+    json: bool,
 }
 
 #[derive(Args)]
-struct RenewTurnArgs {
-    #[arg(long, conflicts_with = "channel", required_unless_present = "channel")]
-    conversation: Option<String>,
+struct RosterArgs {
     #[arg(long)]
-    channel: Option<String>,
-    #[arg(long = "from")]
-    sender: String,
+    all: bool,
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(Args)]
@@ -523,17 +510,6 @@ struct Meta {
 }
 
 #[derive(Serialize, Deserialize, Clone)]
-struct Turn {
-    #[serde(rename = "_v", default = "schema_v1")]
-    v: u16,
-    holder: Option<String>,
-    counter: u64,
-    turn_ttl_seconds: u64,
-    updated_at: String,
-    expires_at: String,
-}
-
-#[derive(Serialize, Deserialize, Clone)]
 struct Message {
     #[serde(rename = "_v", default = "schema_v1")]
     v: u16,
@@ -548,6 +524,8 @@ struct Message {
     body: String,
     created_at: String,
     requires_ack: bool,
+    #[serde(default)]
+    needs_response_from: Vec<String>,
     #[serde(default)]
     subject_id: Option<String>,
     after: Option<String>,
@@ -760,11 +738,9 @@ struct UiConversation {
     channel: bool,
     private: bool,
     joined: bool,
-    turn: Option<String>,
-    turn_expires_at: String,
-    turn_expired: bool,
     message_count: usize,
     unread_count: usize,
+    open_asks: usize,
     latest_at: Option<String>,
     messages: Vec<UiMessage>,
 }
@@ -780,6 +756,7 @@ struct UiMessage {
     body: String,
     created_at: String,
     requires_ack: bool,
+    needs_response_from: Vec<String>,
     unread: bool,
     after: Option<String>,
 }
@@ -798,7 +775,7 @@ struct UiSendRequest {
     #[serde(default)]
     requires_ack: bool,
     #[serde(default)]
-    pass_to: Option<String>,
+    needs_response_from: Vec<String>,
     #[serde(default)]
     after: Option<String>,
     #[serde(default)]
@@ -837,7 +814,7 @@ struct SendMessageInput {
     after: Option<String>,
     subject_id: Option<String>,
     requires_ack: bool,
-    pass_to: Option<String>,
+    needs_response_from: String,
 }
 
 struct HttpRequest {
@@ -982,8 +959,8 @@ fn run(root: PathBuf, command: Commands) -> Result<()> {
             ConversationCommand::Open(args) => cmd_conversation_open(&root, args),
         },
         Commands::Send(args) => cmd_send(&root, args),
-        Commands::PassTurn(args) => cmd_pass_turn(&root, args),
-        Commands::RenewTurn(args) => cmd_renew_turn(&root, args),
+        Commands::Awaiting(args) => cmd_awaiting(&root, args),
+        Commands::Roster(args) => cmd_roster(&root, args),
         Commands::Inbox(args) => cmd_inbox(&root, args),
         Commands::Wait(args) => cmd_wait(&root, args),
         Commands::Watch(args) => cmd_watch(&root, args),
@@ -1021,9 +998,6 @@ fn cmd_init(root: &Path) -> Result<()> {
 fn migrate_conversation_records(conv: &Path) -> Result<()> {
     if let Some(meta) = read_json::<Meta>(&conv.join("meta.json"))? {
         atomic_write_json(&conv.join("meta.json"), &meta)?;
-    }
-    if let Some(turn) = read_json::<Turn>(&conv.join("turn.json"))? {
-        atomic_write_json(&conv.join("turn.json"), &turn)?;
     }
     if let Some(rate) = read_json::<RateState>(&conv.join("rate.json"))? {
         atomic_write_json(&conv.join("rate.json"), &rate)?;
@@ -1357,16 +1331,7 @@ fn cmd_channel_create(root: &Path, args: ChannelCreateArgs) -> Result<()> {
             max_message_bytes: args.max_message_bytes,
         },
     };
-    let turn = Turn {
-        v: SCHEMA_VERSION,
-        holder: Some(creator.clone()),
-        counter: 1,
-        turn_ttl_seconds: args.turn_ttl,
-        updated_at: iso_now(),
-        expires_at: iso_after(args.turn_ttl),
-    };
     atomic_write_json(&conv.join("meta.json"), &meta)?;
-    atomic_write_json(&conv.join("turn.json"), &turn)?;
     write_system_message(
         &conv,
         &channel_id,
@@ -1446,7 +1411,7 @@ fn cmd_conversation_create(root: &Path, args: ConversationCreateArgs) -> Result<
         if args.if_missing {
             migrate_conversation_records(&conv)?;
             println!(
-                "conversation {conversation_id} ready; turn={starter}; root={}",
+                "conversation {conversation_id} ready; root={}",
                 root.display()
             );
             return Ok(());
@@ -1475,25 +1440,19 @@ fn cmd_conversation_create(root: &Path, args: ConversationCreateArgs) -> Result<
             max_message_bytes: args.max_message_bytes,
         },
     };
-    let turn = Turn {
-        v: SCHEMA_VERSION,
-        holder: Some(starter.clone()),
-        counter: 1,
-        turn_ttl_seconds: args.turn_ttl,
-        updated_at: iso_now(),
-        expires_at: iso_after(args.turn_ttl),
-    };
     atomic_write_json(&conv.join("meta.json"), &meta)?;
-    atomic_write_json(&conv.join("turn.json"), &turn)?;
     write_system_message(
         &conv,
         &conversation_id,
         vec![starter.clone()],
-        format!("Conversation opened. Turn holder is {starter}."),
+        format!(
+            "Conversation opened by {starter}. Participants: {}.",
+            meta.participants.join(",")
+        ),
         "conversation opened",
     )?;
     println!(
-        "conversation {conversation_id} ready; turn={starter}; root={}",
+        "conversation {conversation_id} ready; root={}",
         root.display()
     );
     Ok(())
@@ -1520,7 +1479,6 @@ fn cmd_conversation_open(root: &Path, args: ConversationOpenArgs) -> Result<()> 
             starter: Some(opener),
             private: true,
             if_missing: args.if_missing,
-            turn_ttl: args.turn_ttl,
             retention_days: args.retention_days,
             rate_window: args.rate_window,
             rate_max: args.rate_max,
@@ -1543,7 +1501,7 @@ fn cmd_send(root: &Path, args: SendArgs) -> Result<()> {
             after: args.after,
             subject_id: args.subject_id,
             requires_ack: args.requires_ack,
-            pass_to: args.pass_to,
+            needs_response_from: args.needs_response_from,
         },
     )?;
     println!("{message_id}");
@@ -1569,12 +1527,20 @@ fn send_message(root: &Path, input: SendMessageInput) -> Result<String> {
         LOCK_TTL_SECONDS,
         LOCK_TIMEOUT_SECONDS,
     )?;
-    let (conv, meta, turn) = load_conversation(root, &conversation_id)?;
+    let (conv, meta) = load_conversation(root, &conversation_id)?;
     ensure_participant(&meta, &sender)?;
     let mentions = mentioned_participants(&meta, &input.subject, &input.body);
     recipients.extend(mentions.iter().cloned());
     recipients = unique(recipients);
     ensure_recipients(&meta, &recipients)?;
+    let needs_response_from = unique(split_recipients(&input.needs_response_from)?);
+    for awaited in &needs_response_from {
+        ensure_participant(&meta, awaited)?;
+        if !recipients.iter().any(|recipient| recipient == awaited || recipient == "*") {
+            recipients.push(awaited.clone());
+        }
+    }
+    recipients = unique(recipients);
     let kind = normalize_send_kind(&input.kind)?;
     let subject_id = input
         .subject_id
@@ -1586,14 +1552,6 @@ fn send_message(root: &Path, input: SendMessageInput) -> Result<String> {
         .as_deref()
         .map(|value| validate_id(value, "after message id"))
         .transpose()?;
-    if !kind_requires_turn(&kind) && input.pass_to.is_some() {
-        bail!("only turn-scoped kind \"message\" can pass the turn");
-    }
-    if kind_requires_turn(&kind) {
-        ensure_sender_holds_turn_or_grace(root, &conv, &meta, &turn, &sender)?;
-    } else {
-        let _ = maybe_advance_expired_turn(root, &conv, &meta, &turn)?;
-    }
     enforce_rate_limit(&conv, &meta, &sender, subject_id.as_deref(), &input.body)?;
 
     let message_id = new_message_id();
@@ -1609,6 +1567,7 @@ fn send_message(root: &Path, input: SendMessageInput) -> Result<String> {
         body: input.body,
         created_at: iso_now(),
         requires_ack: input.requires_ack,
+        needs_response_from,
         subject_id,
         after,
     };
@@ -1616,43 +1575,243 @@ fn send_message(root: &Path, input: SendMessageInput) -> Result<String> {
         &conv.join("messages").join(format!("{message_id}.json")),
         &message,
     )?;
-    if let Some(next_holder) = input.pass_to {
-        pass_turn_locked(root, &conv, &meta, &sender, &next_holder, false)?;
-    }
     Ok(message_id)
 }
 
-fn cmd_pass_turn(root: &Path, args: PassTurnArgs) -> Result<()> {
-    let conversation_id = target_room(args.conversation.as_deref(), args.channel.as_deref())?;
-    let sender = validate_id(&args.sender, "sender")?;
+#[derive(Serialize, Clone)]
+struct OpenAsk {
+    conversation_id: String,
+    message_id: String,
+    from: String,
+    awaited: String,
+    subject: String,
+    created_at: String,
+    status: String,
+}
+
+fn ask_is_terminal(status: &str) -> bool {
+    matches!(status, "done" | "rejected")
+}
+
+fn message_awaited(message: &Message, meta: &Meta) -> Vec<String> {
+    let awaited = if !message.needs_response_from.is_empty() {
+        message.needs_response_from.clone()
+    } else if message.requires_ack {
+        receipt_recipients(message, meta)
+    } else {
+        return Vec::new();
+    };
+    awaited
+        .into_iter()
+        .filter(|agent| agent != &message.from && agent != "*")
+        .collect()
+}
+
+fn gather_open_asks(
+    root: &Path,
+    only_conversation: Option<&str>,
+    participant: Option<&str>,
+) -> Result<Vec<OpenAsk>> {
+    let mut asks = Vec::new();
+    for entry in sorted_read_dir(&root.join("conversations"))? {
+        let conv = entry.path();
+        if !conv.is_dir() {
+            continue;
+        }
+        let Some(meta): Option<Meta> = read_json(&conv.join("meta.json"))? else {
+            continue;
+        };
+        if let Some(id) = only_conversation
+            && meta.id != id
+        {
+            continue;
+        }
+        if let Some(agent) = participant
+            && !meta.participants.iter().any(|item| item == agent)
+        {
+            continue;
+        }
+        for message_entry in sorted_read_dir(&conv.join("messages"))? {
+            if message_entry.path().extension() != Some(OsStr::new("json")) {
+                continue;
+            }
+            let Some(message): Option<Message> = read_json(&message_entry.path())? else {
+                continue;
+            };
+            if message.kind == "system" || message.kind == "receipt" {
+                continue;
+            }
+            let awaited = message_awaited(&message, &meta);
+            if awaited.is_empty() {
+                continue;
+            }
+            let receipts = load_message_receipts(root, &message)?;
+            for who in awaited {
+                let status = receipts.get(&who).map(|receipt| receipt.status.clone());
+                if status.as_deref().map(ask_is_terminal).unwrap_or(false) {
+                    continue;
+                }
+                asks.push(OpenAsk {
+                    conversation_id: meta.id.clone(),
+                    message_id: message.id.clone(),
+                    from: message.from.clone(),
+                    awaited: who,
+                    subject: message.subject.clone(),
+                    created_at: message.created_at.clone(),
+                    status: status.unwrap_or_else(|| "none".to_string()),
+                });
+            }
+        }
+    }
+    asks.sort_by(|left, right| {
+        left.created_at
+            .cmp(&right.created_at)
+            .then_with(|| left.message_id.cmp(&right.message_id))
+    });
+    Ok(asks)
+}
+
+fn cmd_awaiting(root: &Path, args: AwaitingArgs) -> Result<()> {
     ensure_root(root)?;
-    let _lock = DirLock::acquire(
-        root,
-        &format!("conversation-{conversation_id}"),
-        LOCK_TTL_SECONDS,
-        LOCK_TIMEOUT_SECONDS,
-    )?;
-    let (conv, meta, _) = load_conversation(root, &conversation_id)?;
-    ensure_participant(&meta, &sender)?;
-    pass_turn_locked(root, &conv, &meta, &sender, &args.to, args.force)?;
-    println!("turn passed to {}", args.to);
+    let agent = validate_id(&args.agent, "agent id")?;
+    let only = optional_target_room(args.conversation.as_deref(), args.channel.as_deref())?;
+    let asks = gather_open_asks(root, only.as_deref(), Some(&agent))?;
+    let incoming: Vec<&OpenAsk> = asks.iter().filter(|ask| ask.awaited == agent).collect();
+    let outgoing: Vec<&OpenAsk> = asks
+        .iter()
+        .filter(|ask| ask.from == agent && ask.awaited != agent)
+        .collect();
+    if args.json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "agent": agent,
+                "you_owe": incoming,
+                "owed_to_you": outgoing
+            }))?
+        );
+        return Ok(());
+    }
+    println!("awaiting for @{agent}");
+    println!("you owe a response to:");
+    if incoming.is_empty() {
+        println!("  nothing");
+    }
+    for ask in &incoming {
+        println!(
+            "  {} in {} from @{} [{}]: {}",
+            ask.message_id, ask.conversation_id, ask.from, ask.status, ask.subject
+        );
+    }
+    println!("waiting on a response from others:");
+    if outgoing.is_empty() {
+        println!("  nothing");
+    }
+    for ask in &outgoing {
+        println!(
+            "  {} in {} -> @{} [{}]: {}",
+            ask.message_id, ask.conversation_id, ask.awaited, ask.status, ask.subject
+        );
+    }
     Ok(())
 }
 
-fn cmd_renew_turn(root: &Path, args: RenewTurnArgs) -> Result<()> {
-    let conversation_id = target_room(args.conversation.as_deref(), args.channel.as_deref())?;
-    let sender = validate_id(&args.sender, "sender")?;
+fn state_priority(state: &str) -> u8 {
+    match state {
+        "blocked" => 0,
+        "working" => 1,
+        "idle" => 2,
+        "away" => 3,
+        _ => 4,
+    }
+}
+
+fn cmd_roster(root: &Path, args: RosterArgs) -> Result<()> {
     ensure_root(root)?;
-    let _lock = DirLock::acquire(
-        root,
-        &format!("conversation-{conversation_id}"),
-        LOCK_TTL_SECONDS,
-        LOCK_TIMEOUT_SECONDS,
-    )?;
-    let (conv, meta, turn) = load_conversation(root, &conversation_id)?;
-    ensure_participant(&meta, &sender)?;
-    let updated = renew_turn_for_holder(root, &conv, &meta, &turn, &sender, true)?;
-    println!("turn renewed for {} until {}", sender, updated.expires_at);
+    let asks = gather_open_asks(root, None, None)?;
+    let mut owes: BTreeMap<String, usize> = BTreeMap::new();
+    let mut waiting_on: BTreeMap<String, usize> = BTreeMap::new();
+    for ask in &asks {
+        *owes.entry(ask.awaited.clone()).or_default() += 1;
+        *waiting_on.entry(ask.from.clone()).or_default() += 1;
+    }
+    let mut entries = Vec::new();
+    for entry in sorted_read_dir(&root.join("agents"))? {
+        if entry.path().extension() != Some(OsStr::new("json")) {
+            continue;
+        }
+        let Some(agent): Option<Agent> = read_json(&entry.path())? else {
+            continue;
+        };
+        let active = parse_time(&agent.expires_at)
+            .map(|expires_at| expires_at >= Utc::now())
+            .unwrap_or(false);
+        if !active && !args.all {
+            continue;
+        }
+        let mention = if agent.mention.is_empty() {
+            format!("@{}", agent.id)
+        } else {
+            agent.mention.clone()
+        };
+        entries.push(serde_json::json!({
+            "id": agent.id,
+            "mention": mention,
+            "active": active,
+            "current_state": agent.current_state,
+            "state_note": agent.state_note,
+            "last_seen_at": agent.last_seen_at,
+            "expires_at": agent.expires_at,
+            "owes": owes.get(&agent.id).copied().unwrap_or(0),
+            "waiting_on": waiting_on.get(&agent.id).copied().unwrap_or(0)
+        }));
+    }
+    entries.sort_by(|left, right| {
+        let lp = state_priority(left["current_state"].as_str().unwrap_or(""));
+        let rp = state_priority(right["current_state"].as_str().unwrap_or(""));
+        lp.cmp(&rp).then_with(|| {
+            left["id"]
+                .as_str()
+                .unwrap_or("")
+                .cmp(right["id"].as_str().unwrap_or(""))
+        })
+    });
+    if args.json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "root": root,
+                "agents": entries
+            }))?
+        );
+        return Ok(());
+    }
+    println!("roster ({} shown):", entries.len());
+    if entries.is_empty() {
+        println!("  none");
+    }
+    for entry in &entries {
+        let liveness = if entry["active"].as_bool().unwrap_or(false) {
+            "live"
+        } else {
+            "stale"
+        };
+        let note = entry["state_note"].as_str().unwrap_or("");
+        let note_suffix = if note.is_empty() {
+            String::new()
+        } else {
+            format!(" — {note}")
+        };
+        println!(
+            "  {} [{}/{}] owes={} waiting={}{}",
+            entry["id"].as_str().unwrap_or("unknown"),
+            liveness,
+            entry["current_state"].as_str().unwrap_or("idle"),
+            entry["owes"].as_u64().unwrap_or(0),
+            entry["waiting_on"].as_u64().unwrap_or(0),
+            note_suffix
+        );
+    }
     Ok(())
 }
 
@@ -2073,6 +2232,12 @@ fn cmd_status(root: &Path, args: StatusArgs) -> Result<()> {
         }));
     }
 
+    let asks = gather_open_asks(root, None, scoped_agent.as_deref())?;
+    let mut open_asks_by_conv: BTreeMap<String, usize> = BTreeMap::new();
+    for ask in &asks {
+        *open_asks_by_conv.entry(ask.conversation_id.clone()).or_default() += 1;
+    }
+
     let mut conversations = Vec::new();
     for entry in sorted_read_dir(&root.join("conversations"))? {
         let conv = entry.path();
@@ -2091,9 +2256,6 @@ fn cmd_status(root: &Path, args: StatusArgs) -> Result<()> {
         {
             continue;
         }
-        let Some(turn): Option<Turn> = read_json(&conv.join("turn.json"))? else {
-            continue;
-        };
         let messages = sorted_read_dir(&conv.join("messages"))
             .map(|items| items.len())
             .unwrap_or(0);
@@ -2102,9 +2264,8 @@ fn cmd_status(root: &Path, args: StatusArgs) -> Result<()> {
             "participants": meta.participants,
             "channel": meta.channel,
             "private": meta.private,
-            "turn": turn.holder,
-            "turn_expires_at": turn.expires_at,
-            "messages": messages
+            "messages": messages,
+            "open_asks": open_asks_by_conv.get(&meta.id).copied().unwrap_or(0)
         }));
     }
 
@@ -2126,16 +2287,23 @@ fn cmd_status(root: &Path, args: StatusArgs) -> Result<()> {
         println!("  none");
     }
     for agent in agents {
-        let state = if agent["active"].as_bool().unwrap_or(false) {
-            "active"
+        let liveness = if agent["active"].as_bool().unwrap_or(false) {
+            "live"
         } else {
             "stale"
         };
+        let note = agent["state_note"].as_str().unwrap_or("");
+        let note_suffix = if note.is_empty() {
+            String::new()
+        } else {
+            format!(" — {note}")
+        };
         println!(
-            "  {} ({}): {state}; workspace={}",
+            "  {} ({}): {liveness}/{}{}",
             agent["id"].as_str().unwrap_or("unknown"),
             agent["mention"].as_str().unwrap_or(""),
-            agent["workspace"].as_str().unwrap_or("")
+            agent["current_state"].as_str().unwrap_or("idle"),
+            note_suffix
         );
     }
     println!("conversations:");
@@ -2151,14 +2319,11 @@ fn cmd_status(root: &Path, args: StatusArgs) -> Result<()> {
             "chat"
         };
         println!(
-            "  {} [{}]: turn={} expires={} messages={}",
+            "  {} [{}]: messages={} open_asks={}",
             conversation["id"].as_str().unwrap_or("unknown"),
             room_kind,
-            conversation["turn"].as_str().unwrap_or("nobody"),
-            conversation["turn_expires_at"]
-                .as_str()
-                .unwrap_or("unknown"),
-            conversation["messages"].as_u64().unwrap_or(0)
+            conversation["messages"].as_u64().unwrap_or(0),
+            conversation["open_asks"].as_u64().unwrap_or(0)
         );
     }
     Ok(())
@@ -2416,15 +2581,6 @@ fn doctor_scan_conversations(
             continue;
         };
         doctor_check_meta(root, report, claimed_agents, &conv, &meta);
-        let turn_path = conv.join("turn.json");
-        if !turn_path.exists() {
-            report.error(root, &conv, "missing_turn", "conversation has no turn.json");
-        } else {
-            doctor_check_file_mode(root, &turn_path, report);
-            if let Some(turn) = doctor_read_json::<Turn>(root, &turn_path, report) {
-                doctor_check_turn(root, report, &turn_path, &meta, &turn);
-            }
-        }
         for child in ["messages", "receipts"] {
             let path = conv.join(child);
             if !path.exists() {
@@ -2536,39 +2692,6 @@ fn doctor_check_meta(
             "rate.max_message_bytes must be positive",
         );
     }
-}
-
-fn doctor_check_turn(
-    root: &Path,
-    report: &mut DoctorReport,
-    turn_path: &Path,
-    meta: &Meta,
-    turn: &Turn,
-) {
-    doctor_check_schema(root, turn_path, report, turn.v, "turn");
-    if let Some(holder) = turn.holder.as_deref()
-        && !meta
-            .participants
-            .iter()
-            .any(|participant| participant == holder)
-    {
-        report.error(
-            root,
-            turn_path,
-            "invalid_turn_holder",
-            format!("turn holder @{holder} is not a participant"),
-        );
-    }
-    if turn.turn_ttl_seconds == 0 {
-        report.error(
-            root,
-            turn_path,
-            "invalid_turn_ttl",
-            "turn_ttl_seconds must be positive",
-        );
-    }
-    doctor_check_time(root, turn_path, report, "updated_at", &turn.updated_at);
-    doctor_check_time(root, turn_path, report, "expires_at", &turn.expires_at);
 }
 
 fn doctor_scan_messages(
@@ -2832,7 +2955,6 @@ fn doctor_check_receipt(
 fn cmd_gc(root: &Path, args: GcArgs) -> Result<()> {
     ensure_root(root)?;
     let mut stale_locks = 0;
-    let mut expired_turns = 0;
     let mut archived_messages = 0;
 
     for entry in sorted_read_dir(&root.join("locks"))? {
@@ -2854,26 +2976,19 @@ fn cmd_gc(root: &Path, args: GcArgs) -> Result<()> {
         let Some(meta): Option<Meta> = read_json(&conv.join("meta.json"))? else {
             continue;
         };
-        let _lock = DirLock::acquire(
-            root,
-            &format!("conversation-{}", meta.id),
-            LOCK_TTL_SECONDS,
-            LOCK_TIMEOUT_SECONDS,
-        )?;
-        let Some(turn): Option<Turn> = read_json(&conv.join("turn.json"))? else {
-            continue;
-        };
-        let advanced = maybe_advance_expired_turn(root, &conv, &meta, &turn)?.1;
-        if advanced {
-            expired_turns += 1;
-        }
         if args.archive {
+            let _lock = DirLock::acquire(
+                root,
+                &format!("conversation-{}", meta.id),
+                LOCK_TTL_SECONDS,
+                LOCK_TIMEOUT_SECONDS,
+            )?;
             archived_messages += archive_old_messages(root, &conv, &meta)?;
         }
     }
 
     println!(
-        "gc complete: stale_locks={stale_locks} expired_turns={expired_turns} archived_messages={archived_messages}"
+        "gc complete: stale_locks={stale_locks} archived_messages={archived_messages}"
     );
     Ok(())
 }
@@ -3084,7 +3199,7 @@ fn api_send(root: &Path, body: &[u8]) -> Result<serde_json::Value> {
             after: request.after,
             subject_id: request.subject_id,
             requires_ack: request.requires_ack,
-            pass_to: request.pass_to,
+            needs_response_from: request.needs_response_from.join(","),
         },
     )?;
     Ok(serde_json::json!({
@@ -3264,16 +3379,7 @@ fn create_conversation_record(
             max_message_bytes: DEFAULT_MAX_MESSAGE_BYTES,
         },
     };
-    let turn = Turn {
-        v: SCHEMA_VERSION,
-        holder: Some(starter.clone()),
-        counter: 1,
-        turn_ttl_seconds: DEFAULT_TURN_TTL_SECONDS,
-        updated_at: iso_now(),
-        expires_at: iso_after(DEFAULT_TURN_TTL_SECONDS),
-    };
     atomic_write_json(&conv.join("meta.json"), &meta)?;
-    atomic_write_json(&conv.join("turn.json"), &turn)?;
     let subject = if channel {
         "channel opened"
     } else {
@@ -3285,7 +3391,10 @@ fn create_conversation_record(
             meta.participants.join(",")
         )
     } else {
-        format!("Conversation opened. Turn holder is {starter}.")
+        format!(
+            "Conversation opened by {starter}. Participants: {}.",
+            meta.participants.join(",")
+        )
     };
     write_system_message(&conv, &conversation_id, vec![starter], body, subject)?;
     Ok(())
@@ -3424,6 +3533,12 @@ fn build_ui_snapshot(root: &Path, agent_id: &str, limit: usize) -> Result<UiSnap
         });
     }
 
+    let asks = gather_open_asks(root, None, Some(agent_id))?;
+    let mut open_asks_by_conv: BTreeMap<String, usize> = BTreeMap::new();
+    for ask in &asks {
+        *open_asks_by_conv.entry(ask.conversation_id.clone()).or_default() += 1;
+    }
+
     let mut conversations = Vec::new();
     for entry in sorted_read_dir(&root.join("conversations"))? {
         let conv = entry.path();
@@ -3440,9 +3555,6 @@ fn build_ui_snapshot(root: &Path, agent_id: &str, limit: usize) -> Result<UiSnap
         if !joined && (!meta.channel || meta.private) {
             continue;
         }
-        let Some(turn): Option<Turn> = read_json(&conv.join("turn.json"))? else {
-            continue;
-        };
         let mut messages = Vec::new();
         if joined {
             for message_entry in sorted_read_dir(&conv.join("messages"))? {
@@ -3466,6 +3578,7 @@ fn build_ui_snapshot(root: &Path, agent_id: &str, limit: usize) -> Result<UiSnap
                     body: message.body,
                     created_at: message.created_at,
                     requires_ack: message.requires_ack,
+                    needs_response_from: message.needs_response_from,
                     unread,
                     after: message.after,
                 });
@@ -3478,20 +3591,15 @@ fn build_ui_snapshot(root: &Path, agent_id: &str, limit: usize) -> Result<UiSnap
         if messages.len() > limit {
             messages = messages.split_off(messages.len() - limit);
         }
-        let turn_expired = parse_time(&turn.expires_at)
-            .map(|expires_at| expires_at < Utc::now())
-            .unwrap_or(true);
         conversations.push(UiConversation {
-            id: meta.id,
+            id: meta.id.clone(),
             participants: meta.participants,
             channel: meta.channel,
             private: meta.private,
             joined,
-            turn: turn.holder,
-            turn_expires_at: turn.expires_at,
-            turn_expired,
             message_count,
             unread_count,
+            open_asks: open_asks_by_conv.get(&meta.id).copied().unwrap_or(0),
             latest_at,
             messages,
         });
@@ -4187,8 +4295,8 @@ const UI_HTML: &str = r##"<!doctype html>
             </select>
           </div>
           <div class="field">
-            <label for="pass-input">Pass</label>
-            <select id="pass-input" name="pass_to"></select>
+            <label for="needs-input">Needs reply</label>
+            <select id="needs-input" name="needs_response_from"></select>
           </div>
           <label class="check">
             <input id="ack-input" name="requires_ack" type="checkbox">
@@ -4271,7 +4379,6 @@ const UI_HTML: &str = r##"<!doctype html>
         const haystack = [
           conversation.id,
           conversation.participants.join(" "),
-          conversation.turn || "",
           roomPreview(conversation)
         ].join(" ").toLowerCase();
         return haystack.includes(query);
@@ -4343,13 +4450,10 @@ const UI_HTML: &str = r##"<!doctype html>
       return `seen ${fmtTime(agent.last_seen_at)}`;
     }
 
-    function turnLabel(agentId) {
-      if (!agentId) return "none";
-      const agent = state.snapshot?.agents.find((item) => item.id === agentId);
-      if (!agent) return agentId;
-      if (!agent.active) return `${agentId} stale`;
-      const note = agent.state_note ? ` - ${agent.state_note}` : "";
-      return `${agentId} ${agent.current_state}${note}`;
+    function asksLabel(conversation) {
+      const open = conversation.open_asks || 0;
+      if (open === 0) return "no open asks";
+      return open === 1 ? "1 open ask" : `${open} open asks`;
     }
 
     function renderRooms(conversations) {
@@ -4385,7 +4489,7 @@ const UI_HTML: &str = r##"<!doctype html>
 
         const meta = document.createElement("div");
         meta.className = "muted";
-        meta.textContent = `${roomKind(conversation)} | turn ${turnLabel(conversation.turn)}`;
+        meta.textContent = `${roomKind(conversation)} | ${asksLabel(conversation)}`;
         const preview = document.createElement("div");
         preview.className = "muted clip";
         preview.textContent = roomPreview(conversation);
@@ -4422,7 +4526,7 @@ const UI_HTML: &str = r##"<!doctype html>
       }
 
       $("room-title").textContent = conversation.id;
-      $("room-subtitle").textContent = `${conversation.participants.join(", ")} | ${roomKind(conversation)} | turn ${turnLabel(conversation.turn)} until ${fmtTime(conversation.turn_expires_at)}`;
+      $("room-subtitle").textContent = `${conversation.participants.join(", ")} | ${roomKind(conversation)} | ${asksLabel(conversation)}`;
 
       if (conversation.channel && !conversation.joined) {
         join.hidden = false;
@@ -4491,6 +4595,9 @@ const UI_HTML: &str = r##"<!doctype html>
       if (!system) metaBits.push(`to ${message.to.join(", ")}`);
       if (message.kind !== "message" && !system) metaBits.push(message.kind);
       if (message.requires_ack) metaBits.push("ack");
+      if (message.needs_response_from && message.needs_response_from.length > 0) {
+        metaBits.push(`needs reply: ${message.needs_response_from.join(", ")}`);
+      }
       if (message.unread) metaBits.push("unread");
       if (metaBits.length > 0) {
         const meta = document.createElement("div");
@@ -4510,21 +4617,21 @@ const UI_HTML: &str = r##"<!doctype html>
         $("to-input").value = defaultTo;
         $("to-input").dataset.room = conversation.id;
       }
-      const pass = $("pass-input");
-      const previous = pass.value;
-      pass.textContent = "";
+      const needs = $("needs-input");
+      const previous = needs.value;
+      needs.textContent = "";
       const blank = document.createElement("option");
       blank.value = "";
-      blank.textContent = "No handoff";
-      pass.append(blank);
+      blank.textContent = "No reply needed";
+      needs.append(blank);
       for (const participant of conversation.participants) {
         if (participant === state.agent) continue;
         const option = document.createElement("option");
         option.value = participant;
         option.textContent = participant;
-        pass.append(option);
+        needs.append(option);
       }
-      pass.value = [...pass.options].some((option) => option.value === previous) ? previous : "";
+      needs.value = [...needs.options].some((option) => option.value === previous) ? previous : "";
     }
 
     function renderDetails() {
@@ -4544,7 +4651,7 @@ const UI_HTML: &str = r##"<!doctype html>
           `id: ${conversation.id}`,
           `kind: ${roomKind(conversation)}`,
           `joined: ${conversation.joined ? "yes" : "no"}`,
-          `turn: ${conversation.turn || "none"}`,
+          `open asks: ${conversation.open_asks || 0}`,
           `messages: ${conversation.message_count}`
         ]));
       }
@@ -4713,15 +4820,15 @@ const UI_HTML: &str = r##"<!doctype html>
         body,
         kind: $("kind-input").value || "message",
         requires_ack: $("ack-input").checked,
-        pass_to: $("pass-input").value || null
+        needs_response_from: $("needs-input").value ? [$("needs-input").value] : []
       };
-      if (payload.kind !== "message") payload.pass_to = null;
+      if (payload.kind !== "message") payload.needs_response_from = [];
       try {
         state.forceScrollBottom = true;
         await apiPost("/api/send", payload);
         $("body-input").value = "";
         $("ack-input").checked = false;
-        $("pass-input").value = "";
+        $("needs-input").value = "";
         await loadSnapshot();
         toast("Sent");
       } catch (error) {
@@ -4770,239 +4877,11 @@ const UI_HTML: &str = r##"<!doctype html>
 </html>
 "##;
 
-fn load_conversation(root: &Path, conversation_id: &str) -> Result<(PathBuf, Meta, Turn)> {
+fn load_conversation(root: &Path, conversation_id: &str) -> Result<(PathBuf, Meta)> {
     let conv = conversation_path(root, conversation_id)?;
     let meta: Meta = read_json(&conv.join("meta.json"))?
         .ok_or_else(|| RaftError(format!("conversation {conversation_id:?} does not exist")))?;
-    let turn: Turn = read_json(&conv.join("turn.json"))?.ok_or_else(|| {
-        RaftError(format!(
-            "conversation {conversation_id:?} has no turn state"
-        ))
-    })?;
-    Ok((conv, meta, turn))
-}
-
-fn pass_turn_locked(
-    _root: &Path,
-    conv: &Path,
-    meta: &Meta,
-    sender: &str,
-    next_holder: &str,
-    force: bool,
-) -> Result<()> {
-    let next_holder = validate_id(next_holder, "next turn holder")?;
-    ensure_participant(meta, &next_holder)?;
-    let turn: Turn = read_json(&conv.join("turn.json"))?
-        .ok_or_else(|| RaftError(format!("conversation {:?} has no turn state", meta.id)))?;
-    if !force && turn.holder.as_deref() != Some(sender) {
-        bail!(
-            "turn is held by {:?}; {sender:?} cannot pass it",
-            turn.holder
-        );
-    }
-    let updated = Turn {
-        v: SCHEMA_VERSION,
-        holder: Some(next_holder.clone()),
-        counter: turn.counter + 1,
-        turn_ttl_seconds: turn.turn_ttl_seconds,
-        updated_at: iso_now(),
-        expires_at: iso_after(turn.turn_ttl_seconds),
-    };
-    atomic_write_json(&conv.join("turn.json"), &updated)?;
-    write_system_message(
-        conv,
-        &meta.id,
-        vec![next_holder.clone()],
-        format!("Turn passed from {sender} to {next_holder}."),
-        "turn passed",
-    )?;
-    Ok(())
-}
-
-fn ensure_sender_holds_turn_or_grace(
-    root: &Path,
-    conv: &Path,
-    meta: &Meta,
-    turn: &Turn,
-    sender: &str,
-) -> Result<Turn> {
-    if turn.holder.as_deref() != Some(sender) {
-        bail!(
-            "turn is held by {:?}; use pass-turn or wait for the monitor",
-            turn.holder
-        );
-    }
-    let now = Utc::now();
-    let expires_at = parse_time(&turn.expires_at).ok();
-    if !expires_at
-        .map(|expires_at| expires_at < now)
-        .unwrap_or(true)
-    {
-        return Ok(turn.clone());
-    }
-    if expires_at
-        .map(|expires_at| now <= expires_at + TimeDelta::seconds(TURN_EXPIRE_GRACE_SECONDS))
-        .unwrap_or(false)
-    {
-        return extend_turn_lease(conv, turn, sender);
-    }
-    let (advanced, _) = maybe_advance_expired_turn(root, conv, meta, turn)?;
-    bail!(
-        "your turn expired at {}; grace window is {}s; it was reassigned to {}",
-        turn.expires_at,
-        TURN_EXPIRE_GRACE_SECONDS,
-        advanced.holder.unwrap_or_else(|| "nobody".to_string())
-    );
-}
-
-fn renew_turn_for_holder(
-    root: &Path,
-    conv: &Path,
-    meta: &Meta,
-    turn: &Turn,
-    holder: &str,
-    announce: bool,
-) -> Result<Turn> {
-    if turn.holder.as_deref() != Some(holder) {
-        bail!(
-            "turn is held by {:?}; {holder:?} cannot renew it",
-            turn.holder
-        );
-    }
-    let now = Utc::now();
-    let expires_at = parse_time(&turn.expires_at).ok();
-    if expires_at
-        .map(|expires_at| expires_at < now)
-        .unwrap_or(true)
-        && !expires_at
-            .map(|expires_at| now <= expires_at + TimeDelta::seconds(TURN_EXPIRE_GRACE_SECONDS))
-            .unwrap_or(false)
-    {
-        let (advanced, _) = maybe_advance_expired_turn(root, conv, meta, turn)?;
-        bail!(
-            "your turn expired at {}; grace window is {}s; it was reassigned to {}",
-            turn.expires_at,
-            TURN_EXPIRE_GRACE_SECONDS,
-            advanced.holder.unwrap_or_else(|| "nobody".to_string())
-        );
-    }
-    let updated = extend_turn_lease(conv, turn, holder)?;
-    if announce {
-        write_system_message(
-            conv,
-            &meta.id,
-            vec!["*".to_string()],
-            format!("Turn lease renewed by {holder}."),
-            "turn renewed",
-        )?;
-    }
-    Ok(updated)
-}
-
-fn extend_turn_lease(conv: &Path, turn: &Turn, holder: &str) -> Result<Turn> {
-    let updated = Turn {
-        v: SCHEMA_VERSION,
-        holder: Some(holder.to_string()),
-        counter: turn.counter,
-        turn_ttl_seconds: turn.turn_ttl_seconds,
-        updated_at: iso_now(),
-        expires_at: iso_after(turn.turn_ttl_seconds),
-    };
-    atomic_write_json(&conv.join("turn.json"), &updated)?;
-    Ok(updated)
-}
-
-fn maybe_advance_expired_turn(
-    root: &Path,
-    conv: &Path,
-    meta: &Meta,
-    turn: &Turn,
-) -> Result<(Turn, bool)> {
-    let expired = parse_time(&turn.expires_at)
-        .map(|expires_at| expires_at < Utc::now())
-        .unwrap_or(true);
-    if !expired {
-        return Ok((turn.clone(), false));
-    }
-    let previous = turn.holder.clone();
-    let next_holder = choose_next_holder(root, &meta.participants, previous.as_deref())?;
-    let updated = Turn {
-        v: SCHEMA_VERSION,
-        holder: next_holder.clone(),
-        counter: turn.counter + 1,
-        turn_ttl_seconds: turn.turn_ttl_seconds,
-        updated_at: iso_now(),
-        expires_at: iso_after(turn.turn_ttl_seconds),
-    };
-    atomic_write_json(&conv.join("turn.json"), &updated)?;
-    let recipient = next_holder
-        .clone()
-        .map(|holder| vec![holder])
-        .unwrap_or_else(|| vec!["*".to_string()]);
-    write_system_message(
-        conv,
-        &meta.id,
-        recipient,
-        format!(
-            "Turn lease expired for {}; reassigned to {}.",
-            previous.unwrap_or_else(|| "nobody".to_string()),
-            next_holder.clone().unwrap_or_else(|| "nobody".to_string())
-        ),
-        "turn lease expired",
-    )?;
-    Ok((updated, true))
-}
-
-fn choose_next_holder(
-    root: &Path,
-    participants: &[String],
-    current: Option<&str>,
-) -> Result<Option<String>> {
-    if participants.is_empty() {
-        return Ok(None);
-    }
-    let live = active_agents(root)?;
-    let candidates: Vec<String> = if live.is_empty() {
-        participants.to_vec()
-    } else {
-        participants
-            .iter()
-            .filter(|agent| live.contains(agent.as_str()))
-            .cloned()
-            .collect()
-    };
-    let candidates = if candidates.is_empty() {
-        participants.to_vec()
-    } else {
-        candidates
-    };
-    let Some(current) = current else {
-        return Ok(candidates.first().cloned());
-    };
-    let index = candidates.iter().position(|agent| agent == current);
-    Ok(match index {
-        Some(index) => Some(candidates[(index + 1) % candidates.len()].clone()),
-        None => candidates.first().cloned(),
-    })
-}
-
-fn active_agents(root: &Path) -> Result<BTreeSet<String>> {
-    let mut active = BTreeSet::new();
-    for entry in sorted_read_dir(&root.join("agents"))? {
-        if entry.path().extension() != Some(OsStr::new("json")) {
-            continue;
-        }
-        let Some(agent): Option<Agent> = read_json(&entry.path())? else {
-            continue;
-        };
-        if parse_time(&agent.expires_at)
-            .map(|expires_at| expires_at >= Utc::now())
-            .unwrap_or(false)
-        {
-            active.insert(agent.id);
-        }
-    }
-    Ok(active)
+    Ok((conv, meta))
 }
 
 fn enforce_rate_limit(
@@ -5476,6 +5355,7 @@ fn write_system_message(
         body,
         created_at: iso_now(),
         requires_ack: false,
+        needs_response_from: Vec::new(),
         subject_id: None,
         after: None,
     };
@@ -6007,10 +5887,6 @@ fn normalize_send_kind(kind: &str) -> Result<String> {
         "system" => bail!("kind \"system\" is reserved for raft internals"),
         _ => bail!("unsupported kind {kind:?}; use message, event, or receipt"),
     }
-}
-
-fn kind_requires_turn(kind: &str) -> bool {
-    kind == "message"
 }
 
 fn validate_subject_id(value: &str) -> Result<String> {
