@@ -615,11 +615,21 @@ pub(crate) struct ShowArgs {
 
 #[derive(Args)]
 pub(crate) struct SearchArgs {
-    /// Substring to search for in message bodies.
-    pub(crate) pattern: String,
+    /// Substring to match across id/conversation/from/subject/body. Optional
+    /// when at least one of --from/--kind/--mentions is given.
+    pub(crate) pattern: Option<String>,
     /// Agent whose visible messages to search.
     #[arg(long)]
     pub(crate) agent: String,
+    /// Only match messages sent by this agent.
+    #[arg(long)]
+    pub(crate) from: Option<String>,
+    /// Only match messages of this kind (message, event, system, receipt).
+    #[arg(long)]
+    pub(crate) kind: Option<String>,
+    /// Only match messages that mention or are addressed to this agent.
+    #[arg(long)]
+    pub(crate) mentions: Option<String>,
     /// Limit to a single conversation.
     #[arg(long, conflicts_with = "channel")]
     pub(crate) conversation: Option<String>,

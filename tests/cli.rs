@@ -3137,3 +3137,81 @@ fn ack_reports_whether_it_closed_an_open_ask() {
     let self_json: serde_json::Value = serde_json::from_slice(&self_ack.stderr).unwrap();
     assert_eq!(self_json["error"]["code"], "not_awaited");
 }
+
+#[test]
+fn search_filters_by_from_kind_and_mentions() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(&bus, &["claim", "alice", "--workspace", "."]);
+    run(&bus, &["claim", "bob", "--workspace", "."]);
+    run(&bus, &["claim", "carol", "--workspace", "."]);
+    run(
+        &bus,
+        &[
+            "conversation", "create", "c", "--participants", "alice,bob,carol",
+            "--starter", "alice",
+        ],
+    );
+    run(
+        &bus,
+        &[
+            "send", "--conversation", "c", "--from", "alice", "--to", "bob",
+            "--subject", "deploy", "--body", "ship it @carol", "--requires-ack",
+        ],
+    );
+    run(
+        &bus,
+        &[
+            "send", "--conversation", "c", "--from", "bob", "--to", "alice",
+            "--subject", "status", "--body", "deploy is green",
+        ],
+    );
+
+    let ids = |out: &std::process::Output| -> Vec<String> {
+        serde_json::from_slice::<Vec<serde_json::Value>>(&out.stdout)
+            .unwrap()
+            .into_iter()
+            .map(|m| m["from"].as_str().unwrap().to_string())
+            .collect()
+    };
+
+    // --from filters to a single sender.
+    let from_bob = run(&bus, &["search", "--agent", "alice", "--from", "bob", "--json"]);
+    assert_eq!(ids(&from_bob), vec!["bob".to_string()]);
+
+    // --mentions matches the @carol mention as well as the to[] recipient.
+    let mentions_carol =
+        run(&bus, &["search", "--agent", "alice", "--mentions", "carol", "--json"]);
+    assert_eq!(ids(&mentions_carol), vec!["alice".to_string()]);
+    let mentions_bob =
+        run(&bus, &["search", "--agent", "alice", "--mentions", "bob", "--json"]);
+    assert_eq!(ids(&mentions_bob), vec!["alice".to_string()]);
+
+    // Pattern + filter combine conjunctively.
+    let combo = run(
+        &bus,
+        &["search", "deploy", "--agent", "alice", "--from", "alice", "--json"],
+    );
+    assert_eq!(ids(&combo), vec!["alice".to_string()]);
+    let no_combo = run(
+        &bus,
+        &["search", "deploy", "--agent", "alice", "--from", "carol", "--json"],
+    );
+    assert!(ids(&no_combo).is_empty());
+
+    // --kind selects message-kind rows.
+    let kind_message =
+        run(&bus, &["search", "--agent", "alice", "--kind", "message", "--json"]);
+    assert_eq!(ids(&kind_message).len(), 2);
+
+    // No criteria at all is rejected.
+    let no_criteria = run_fail(&bus, &["search", "--agent", "alice", "--json"]);
+    let err: serde_json::Value = serde_json::from_slice(&no_criteria.stderr).unwrap();
+    assert_eq!(err["error"]["code"], "error");
+    assert!(
+        err["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("--from/--kind/--mentions")
+    );
+}

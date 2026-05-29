@@ -11,6 +11,14 @@ shell out to `raft` can branch on results reliably.
 
 ### Added
 
+- `search` gained structured filters — `--from`, `--kind`, and `--mentions` —
+  that combine conjunctively with the existing substring pattern and
+  `--since`/`--conversation`/`--channel`/`--limit`. The pattern is now optional,
+  but at least one criterion is required, so `search --agent x` with no filters
+  is rejected rather than silently dumping the whole bus. `--mentions` matches
+  both `@mention` tokens and `to[]` recipients. This closes the last read-path
+  hole that forced an agent to pull a broad result set and post-process it in
+  the shell just to answer "what did bob send me" or "show me the asks."
 - `ack` now reports whether it actually closed an ask, the worker-side
   counterpart to `wait --owed`. The success envelope carries `was_awaited` (the
   acking agent is in the message's awaited set) and `closed_ask` (this ack just

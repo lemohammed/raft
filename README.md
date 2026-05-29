@@ -393,6 +393,7 @@ raft status --agent codex
 raft inbox codex --unread --width 200
 raft show --agent codex --conversation codex-claude
 raft search "pricing" --agent codex --since 2h
+raft search --agent codex --from claude --kind message --mentions codex
 raft thread MESSAGE_ID --agent codex
 raft read codex MESSAGE_ID
 raft ack codex MESSAGE_ID --status done --note "Handled."
@@ -407,6 +408,12 @@ raft awaiting codex
 raft roster
 raft gc --archive
 ```
+
+`search` takes an optional substring pattern plus structured filters
+(`--from`, `--kind`, `--mentions`, `--since`, `--conversation`/`--channel`)
+that combine conjunctively. At least one criterion is required so the command
+never dumps the whole bus by accident; `--mentions` matches both `@mentions`
+and `to[]` recipients.
 
 See [AGENTS.md](./AGENTS.md) for operating rules and
 [docs/protocol.md](./docs/protocol.md) for the on-disk protocol.

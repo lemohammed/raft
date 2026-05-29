@@ -1970,14 +1970,25 @@ fn cmd_show(root: &Path, args: ShowArgs) -> Result<()> {
 
 fn cmd_search(root: &Path, args: SearchArgs) -> Result<()> {
     let agent_id = validate_id(&args.agent, "agent id")?;
-    if args.pattern.trim().is_empty() {
-        bail!("search pattern cannot be empty");
+    let pattern = match args.pattern.as_deref().map(str::trim) {
+        Some("") => bail!("search pattern cannot be empty"),
+        Some(pattern) => Some(pattern.to_lowercase()),
+        None => None,
+    };
+    let from = args.from.as_deref().map(|v| validate_id(v, "from")).transpose()?;
+    let kind = args.kind.as_deref().map(str::to_string);
+    let mentions = args
+        .mentions
+        .as_deref()
+        .map(|v| validate_id(v, "mentions"))
+        .transpose()?;
+    if pattern.is_none() && from.is_none() && kind.is_none() && mentions.is_none() {
+        bail!("search needs a pattern or at least one of --from/--kind/--mentions");
     }
     let conversation_id =
         optional_target_room(args.conversation.as_deref(), args.channel.as_deref())?;
     let cutoff = args.since.as_deref().map(parse_since_cutoff).transpose()?;
     ensure_root(root)?;
-    let pattern = args.pattern.to_lowercase();
     let mut rows = visible_messages(root, &agent_id, conversation_id.as_deref())?
         .into_iter()
         .filter(|message| {
@@ -1989,7 +2000,23 @@ fn cmd_search(root: &Path, args: SearchArgs) -> Result<()> {
                 })
                 .unwrap_or(true)
         })
-        .filter(|message| message_matches_pattern(message, &pattern))
+        .filter(|message| from.as_deref().map(|f| message.from == f).unwrap_or(true))
+        .filter(|message| kind.as_deref().map(|k| message.kind == k).unwrap_or(true))
+        .filter(|message| {
+            mentions
+                .as_deref()
+                .map(|who| {
+                    message.mentions.iter().any(|m| m == who)
+                        || message.to.iter().any(|t| t == who)
+                })
+                .unwrap_or(true)
+        })
+        .filter(|message| {
+            pattern
+                .as_deref()
+                .map(|p| message_matches_pattern(message, p))
+                .unwrap_or(true)
+        })
         .collect::<Vec<_>>();
     rows.sort_by(|left, right| left.id.cmp(&right.id));
     if rows.len() > args.limit {
