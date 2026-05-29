@@ -268,6 +268,15 @@ they write a structured envelope to stderr and exit non-zero:
 Stdout is data; stderr is errors and diagnostics. Parse `error.code`, not the
 message text — codes are stable, messages are not.
 
+Some errors carry extra structured fields alongside `code`/`message` so an
+agent can self-correct in one shot. A `not_participant` failure includes the
+conversation's valid `participants`, so a rejected `send`/`reply` immediately
+reveals who can be addressed (and who to `conversation add`):
+
+```json
+{"ok":false,"error":{"code":"not_participant","message":"recipient \"qa\" is not a participant in \"proj\"","participants":["codex","homekeep-dev"]}}
+```
+
 **Success output shapes (`--json`)**
 
 Two families of success output. *Mutating* commands wrap their result in an

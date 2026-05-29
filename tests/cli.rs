@@ -2642,3 +2642,66 @@ fn conversation_add_lets_a_new_participant_join_an_existing_chat() {
     let missing_json: serde_json::Value = serde_json::from_slice(&missing.stderr).unwrap();
     assert_eq!(missing_json["error"]["code"], "not_found");
 }
+
+#[test]
+fn not_participant_error_lists_the_valid_participants() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(&bus, &["claim", "alice", "--workspace", "."]);
+    run(&bus, &["claim", "bob", "--workspace", "."]);
+    run(&bus, &["claim", "carol", "--workspace", "."]);
+    run(
+        &bus,
+        &[
+            "conversation", "create", "proj", "--participants", "alice,bob",
+            "--starter", "alice",
+        ],
+    );
+
+    // A non-participant sender's error carries the valid participant set so the
+    // agent can self-correct (e.g. ask to be added) without a second lookup.
+    let from_outsider = run_fail(
+        &bus,
+        &[
+            "send", "--conversation", "proj", "--from", "carol", "--to", "alice",
+            "--subject", "hi", "--body", "x", "--json",
+        ],
+    );
+    let from_json: serde_json::Value = serde_json::from_slice(&from_outsider.stderr).unwrap();
+    assert_eq!(from_json["error"]["code"], "not_participant");
+    let mut participants: Vec<&str> = from_json["error"]["participants"]
+        .as_array()
+        .expect("not_participant error should list participants")
+        .iter()
+        .map(|p| p.as_str().unwrap())
+        .collect();
+    participants.sort();
+    assert_eq!(participants, vec!["alice", "bob"]);
+
+    // The same enrichment applies when the bad name is the recipient.
+    let to_outsider = run_fail(
+        &bus,
+        &[
+            "send", "--conversation", "proj", "--from", "alice", "--to", "carol",
+            "--subject", "hi", "--body", "x", "--json",
+        ],
+    );
+    let to_json: serde_json::Value = serde_json::from_slice(&to_outsider.stderr).unwrap();
+    assert_eq!(to_json["error"]["code"], "not_participant");
+    assert_eq!(
+        to_json["error"]["participants"].as_array().unwrap().len(),
+        2
+    );
+
+    // Unrelated errors stay lean — no participants key bleeds in.
+    let not_found = run_fail(
+        &bus,
+        &[
+            "send", "--conversation", "nope", "--from", "alice", "--to", "bob",
+            "--subject", "hi", "--body", "x", "--json",
+        ],
+    );
+    let nf_json: serde_json::Value = serde_json::from_slice(&not_found.stderr).unwrap();
+    assert_eq!(nf_json["error"]["code"], "not_found");
+    assert!(nf_json["error"]["participants"].is_null());
+}

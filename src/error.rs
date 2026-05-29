@@ -6,6 +6,10 @@ pub(crate) type Result<T> = std::result::Result<T, RaftError>;
 pub(crate) struct RaftError {
     pub(crate) code: &'static str,
     pub(crate) message: String,
+    /// Optional structured fields merged into the `--json` error envelope's
+    /// `error` object, so an agent can self-correct without a second round-trip
+    /// (e.g. `not_participant` carries the valid `participants`).
+    pub(crate) details: Option<serde_json::Value>,
 }
 
 impl RaftError {
@@ -13,6 +17,7 @@ impl RaftError {
         Self {
             code: "error",
             message: message.into(),
+            details: None,
         }
     }
 
@@ -20,7 +25,14 @@ impl RaftError {
         Self {
             code,
             message: message.into(),
+            details: None,
         }
+    }
+
+    /// Attach structured detail fields to merge into the JSON error envelope.
+    pub(crate) fn with_details(mut self, details: serde_json::Value) -> Self {
+        self.details = Some(details);
+        self
     }
 
     /// Process exit code for this error. The fine-grained category lives in

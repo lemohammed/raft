@@ -11,6 +11,11 @@ shell out to `raft` can branch on results reliably.
 
 ### Added
 
+- `not_participant` error envelopes now carry the conversation's valid
+  `participants` alongside `code`/`message`, so a rejected `send`/`reply` tells
+  the agent who *can* be addressed (and who to `conversation add`) without a
+  second `show`/`status` round-trip. Error envelopes gained an optional
+  structured-detail channel; unrelated errors stay lean.
 - `conversation add <id> --agent <name>`: add a participant to a conversation
   that already exists. Channels had `channel join`, but a private/group
   conversation's participant set was frozen at creation — looping in a third

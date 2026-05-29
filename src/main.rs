@@ -61,10 +61,16 @@ fn main() {
 /// category (see `RaftError::exit_code`).
 fn fail(err: RaftError, json: bool) -> ! {
     if json {
-        let envelope = serde_json::json!({
-            "ok": false,
-            "error": { "code": err.code, "message": err.message },
-        });
+        let mut error = serde_json::json!({ "code": err.code, "message": err.message });
+        if let Some(details) = &err.details
+            && let Some(extra) = details.as_object()
+            && let Some(error_obj) = error.as_object_mut()
+        {
+            for (key, value) in extra {
+                error_obj.insert(key.clone(), value.clone());
+            }
+        }
+        let envelope = serde_json::json!({ "ok": false, "error": error });
         eprintln!("{envelope}");
     } else {
         eprintln!("raft: {err}");
@@ -2619,11 +2625,14 @@ pub(crate) fn write_system_message(
 
 fn ensure_participant(meta: &Meta, agent_id: &str) -> Result<()> {
     if !meta.participants.iter().any(|item| item == agent_id) {
-        bail_code!(
+        return Err(RaftError::coded(
             "not_participant",
-            "agent {agent_id:?} is not a participant in {:?}",
-            meta.id
-        );
+            format!(
+                "agent {agent_id:?} is not a participant in {:?}",
+                meta.id
+            ),
+        )
+        .with_details(serde_json::json!({ "participants": meta.participants })));
     }
     Ok(())
 }
@@ -2631,11 +2640,14 @@ fn ensure_participant(meta: &Meta, agent_id: &str) -> Result<()> {
 fn ensure_recipients(meta: &Meta, recipients: &[String]) -> Result<()> {
     for recipient in recipients {
         if recipient != "*" && !meta.participants.iter().any(|item| item == recipient) {
-            bail_code!(
+            return Err(RaftError::coded(
                 "not_participant",
-                "recipient {recipient:?} is not a participant in {:?}",
-                meta.id
-            );
+                format!(
+                    "recipient {recipient:?} is not a participant in {:?}",
+                    meta.id
+                ),
+            )
+            .with_details(serde_json::json!({ "participants": meta.participants })));
         }
     }
     Ok(())
