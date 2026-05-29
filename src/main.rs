@@ -2080,15 +2080,53 @@ fn cmd_ack(root: &Path, args: AckArgs) -> Result<()> {
         LOCK_TTL_SECONDS,
         LOCK_TIMEOUT_SECONDS,
     )?;
+
+    // Decide, under the lock, whether this ack actually closes an open ask: the
+    // status must be terminal, the agent must be in the message's awaited set,
+    // and the agent must not have already recorded a terminal receipt.
+    let meta: Option<Meta> = read_json(
+        &root
+            .join("conversations")
+            .join(&message.conversation_id)
+            .join("meta.json"),
+    )?;
+    let awaited = meta
+        .as_ref()
+        .map(|meta| message_awaited(&message, meta))
+        .unwrap_or_default();
+    let was_awaited = awaited.iter().any(|who| who == &agent_id);
+    let already_terminal = read_json::<Receipt>(&receipt_path_for(root, &message, &agent_id))?
+        .map(|receipt| ask_is_terminal(&receipt.status))
+        .unwrap_or(false);
+    let closed_ask = ask_is_terminal(&status) && was_awaited && !already_terminal;
+
+    if args.require_open && !closed_ask {
+        return Err(RaftError::coded(
+            "not_awaited",
+            format!(
+                "ack does not close an open ask awaiting @{agent_id}: message {:?}",
+                message.id
+            ),
+        )
+        .with_details(serde_json::json!({
+            "message_id": message.id,
+            "awaited": awaited,
+            "was_awaited": was_awaited,
+        })));
+    }
+
     write_receipt(root, &agent_id, &message, &status, args.note)?;
     if args.json {
         emit_ok(serde_json::json!({
             "message_id": args.message_id,
             "agent": agent_id,
             "status": status,
+            "was_awaited": was_awaited,
+            "closed_ask": closed_ask,
         }))?;
     } else {
-        println!("{} {}", status, args.message_id);
+        let suffix = if closed_ask { " (closed ask)" } else { "" };
+        println!("{} {}{}", status, args.message_id, suffix);
     }
     Ok(())
 }

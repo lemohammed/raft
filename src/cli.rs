@@ -36,6 +36,7 @@ ERROR CODES (stable; surfaced as error.code in --json mode)
   not_claimed       agent name has not been claimed; run `raft claim`
   not_found         referenced agent, channel, or conversation does not exist
   not_participant   agent or recipient is not a participant in the conversation
+  not_awaited       `ack --require-open` closed no open ask you are awaited on
   conflict          a resource already exists: an agent name claimed by \
 another holder, or a channel/conversation created without --if-missing
   rate_limited      sender exceeded the conversation's message rate limit
@@ -676,6 +677,11 @@ pub(crate) struct AckArgs {
     /// Optional note attached to the acknowledgement.
     #[arg(long)]
     pub(crate) note: Option<String>,
+    /// Fail with `not_awaited` unless this ack actually closes an open ask you
+    /// are awaited on, guarding against a `done`/`rejected` that silently lands
+    /// on the wrong message and leaves the asker blocked forever.
+    #[arg(long)]
+    pub(crate) require_open: bool,
     /// Emit machine-readable JSON instead of text.
     #[arg(long)]
     pub(crate) json: bool,

@@ -3052,3 +3052,88 @@ fn wait_resolution_rejects_unknown_and_unowned_asks() {
     let timeout_json: serde_json::Value = serde_json::from_slice(&timed_out.stderr).unwrap();
     assert_eq!(timeout_json["error"]["code"], "timeout");
 }
+
+#[test]
+fn ack_reports_whether_it_closed_an_open_ask() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(&bus, &["claim", "alice", "--workspace", "."]);
+    run(&bus, &["claim", "bob", "--workspace", "."]);
+    run(
+        &bus,
+        &[
+            "conversation", "create", "c", "--participants", "alice,bob",
+            "--starter", "alice",
+        ],
+    );
+    let ask = run(
+        &bus,
+        &[
+            "send", "--conversation", "c", "--from", "alice", "--to", "bob",
+            "--subject", "Q", "--body", "ack pls", "--requires-ack", "--json",
+        ],
+    );
+    let ask_id = serde_json::from_slice::<serde_json::Value>(&ask.stdout).unwrap()["message_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let plain = run(
+        &bus,
+        &[
+            "send", "--conversation", "c", "--from", "alice", "--to", "bob",
+            "--subject", "FYI", "--body", "info", "--json",
+        ],
+    );
+    let plain_id = serde_json::from_slice::<serde_json::Value>(&plain.stdout).unwrap()
+        ["message_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // A terminal ack from the awaited agent closes the ask.
+    let closed = run(&bus, &["ack", "bob", &ask_id, "--status", "done", "--json"]);
+    let closed_json: serde_json::Value = serde_json::from_slice(&closed.stdout).unwrap();
+    assert_eq!(closed_json["was_awaited"], true);
+    assert_eq!(closed_json["closed_ask"], true);
+
+    // Re-acking is idempotent: still succeeds, but closes nothing new.
+    let again = run(&bus, &["ack", "bob", &ask_id, "--status", "done", "--json"]);
+    let again_json: serde_json::Value = serde_json::from_slice(&again.stdout).unwrap();
+    assert_eq!(again_json["closed_ask"], false);
+
+    // Acking a plain (non-ask) message still works, but closes no ask.
+    let plain_ack = run(&bus, &["ack", "bob", &plain_id, "--status", "done", "--json"]);
+    let plain_ack_json: serde_json::Value = serde_json::from_slice(&plain_ack.stdout).unwrap();
+    assert_eq!(plain_ack_json["was_awaited"], false);
+    assert_eq!(plain_ack_json["closed_ask"], false);
+
+    // --require-open rejects a terminal ack that closes nothing.
+    let rejected = run_fail(
+        &bus,
+        &["ack", "bob", &plain_id, "--status", "done", "--require-open", "--json"],
+    );
+    let rejected_json: serde_json::Value = serde_json::from_slice(&rejected.stderr).unwrap();
+    assert_eq!(rejected_json["error"]["code"], "not_awaited");
+    assert_eq!(rejected_json["error"]["was_awaited"], false);
+
+    // An agent that was never awaited cannot satisfy --require-open either.
+    let ask2 = run(
+        &bus,
+        &[
+            "send", "--conversation", "c", "--from", "alice", "--to", "bob",
+            "--subject", "Q2", "--body", "x", "--requires-ack", "--json",
+        ],
+    );
+    let ask2_id = serde_json::from_slice::<serde_json::Value>(&ask2.stdout).unwrap()
+        ["message_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    // alice (the sender) is not in the awaited set for her own ask.
+    let self_ack = run_fail(
+        &bus,
+        &["ack", "alice", &ask2_id, "--status", "done", "--require-open", "--json"],
+    );
+    let self_json: serde_json::Value = serde_json::from_slice(&self_ack.stderr).unwrap();
+    assert_eq!(self_json["error"]["code"], "not_awaited");
+}

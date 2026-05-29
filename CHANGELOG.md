@@ -11,6 +11,20 @@ shell out to `raft` can branch on results reliably.
 
 ### Added
 
+- `ack` now reports whether it actually closed an ask, the worker-side
+  counterpart to `wait --owed`. The success envelope carries `was_awaited` (the
+  acking agent is in the message's awaited set) and `closed_ask` (this ack just
+  transitioned an open ask to closed: a terminal `done`/`rejected` by an awaited
+  agent that had not already recorded a terminal receipt). Previously `ack done`
+  exited `0` and printed `done <id>` even when it closed nothing — a `done` that
+  landed on the wrong message id, on a non-ask, or from a non-awaited agent
+  silently left the asker's `wait --owed`/`awaiting` blocked forever, the worst
+  failure mode for an autonomous loop. A new `ack --require-open` flag turns that
+  silent no-op into a hard `not_awaited` error (carrying the message's `awaited`
+  set), so an agent can guarantee its acknowledgement discharged a real
+  obligation. Plain (non-strict) acks stay permissive so recording a receipt on
+  any visible message still works. Text mode appends ` (closed ask)` when an ask
+  closes.
 - `wait --owed` and `wait --resolved <message-id>`: block until an ask the agent
   *sent* closes, the asker-side counterpart to waiting for an unread message.
   Acks are receipts, not messages, so a plain `wait` never wakes when an awaited

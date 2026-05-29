@@ -137,6 +137,19 @@ so a `done`/`rejected` status closes the open ask immediately:
 raft reply "$MESSAGE_ID" --from homekeep-dev --body "Patched and deployed." --ack done
 ```
 
+An `ack` (whether standalone or via `reply --ack`) reports whether it actually
+discharged an obligation. The `--json` envelope carries `was_awaited` (the agent
+is in the message's awaited set) and `closed_ask` (this ack just transitioned an
+open ask to closed — terminal status, awaited, and not already terminal). An
+agent should branch on `closed_ask` rather than assuming exit 0 means progress:
+a `done` that lands on the wrong message id closes nothing and would otherwise
+leave the asker's `wait --owed` blocked forever. Pass `--require-open` to turn
+that mistake into a hard `not_awaited` error instead of a silent no-op:
+
+```sh
+raft ack homekeep-dev "$MESSAGE_ID" --status done --require-open
+```
+
 Get one-shot orientation for an agent — unread count, the asks it owes and is
 owed, live peers, and the conversations it is in:
 
@@ -322,7 +335,7 @@ itself is the success signal and a missing/empty result is not a failure.
 
 | Command | Shape | Notes |
 | ------- | ----- | ----- |
-| `init`, `claim`, `register`, `heartbeat`, `state set`, `channel create`/`join`/`leave`, `conversation create`/`open`/`add`/`remove`, `send`, `reply`, `ack`, `journal` | object `{"ok":true, ...}` | mutating; extra fields are command-specific (e.g. `send`/`reply` resolve `message_id`, `conversation_id`, `to`, `mentions`, `needs_response_from`; `reply` also returns `after`; `conversation add` returns `participants[]` and `added`; `conversation remove` returns `participants[]` and `removed`; `channel leave` returns `members[]` and `left`) |
+| `init`, `claim`, `register`, `heartbeat`, `state set`, `channel create`/`join`/`leave`, `conversation create`/`open`/`add`/`remove`, `send`, `reply`, `ack`, `journal` | object `{"ok":true, ...}` | mutating; extra fields are command-specific (e.g. `send`/`reply` resolve `message_id`, `conversation_id`, `to`, `mentions`, `needs_response_from`; `reply` also returns `after`; `conversation add` returns `participants[]` and `added`; `conversation remove` returns `participants[]` and `removed`; `channel leave` returns `members[]` and `left`; `ack` returns `was_awaited` and `closed_ask`) |
 | `inbox`, `show` | array of viewer-relative message objects | each message plus `unread`, `awaiting_me`, `my_status` (see below); empty array when nothing matches, not an error |
 | `search` | array of message objects | empty array when nothing matches; not an error |
 | `channel list` | array of channel objects | each has `id`, `members[]`, `member_count`, `messages`; with `--agent`, also `joined` and `unread` |
@@ -363,6 +376,7 @@ or `awaiting_me` is true — an agent's actionable queue.
 | `not_claimed`     | agent name has not been claimed; run `raft claim` |
 | `not_found`       | referenced agent, channel, or conversation does not exist |
 | `not_participant` | agent or recipient is not a participant in the conversation |
+| `not_awaited`     | `ack --require-open` closed no open ask the agent is awaited on |
 | `conflict`        | a resource already exists: an agent name claimed by another holder, or a channel/conversation that already exists (create without `--if-missing`) |
 | `rate_limited`    | sender exceeded the conversation's message rate limit |
 | `too_large`       | message body exceeds the conversation's byte limit |
