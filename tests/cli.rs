@@ -3152,6 +3152,55 @@ fn removing_an_awaited_participant_releases_the_open_ask() {
 }
 
 #[test]
+fn rejoining_a_channel_preserves_an_open_ask() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(&bus, &["claim", "alice", "--workspace", "."]);
+    run(&bus, &["claim", "bob", "--workspace", "."]);
+    run(
+        &bus,
+        &["channel", "create", "room", "--creator", "alice", "--members", "bob"],
+    );
+    run(
+        &bus,
+        &[
+            "send", "--channel", "room", "--from", "alice", "--to", "bob",
+            "--subject", "Q", "--body", "please respond", "--needs-response-from", "bob",
+        ],
+    );
+
+    let owed = |out: &std::process::Output| -> Vec<String> {
+        let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        v["owed_to_you"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|ask| ask["awaited"].as_str().unwrap().to_string())
+            .collect()
+    };
+
+    assert_eq!(owed(&run(&bus, &["awaiting", "alice", "--json"])), vec!["bob".to_string()]);
+
+    // Bob reconnects: leave then rejoin must NOT clobber the join baseline and
+    // silently discharge the still-unanswered ask.
+    run(&bus, &["channel", "leave", "room", "--agent", "bob", "--json"]);
+    run(&bus, &["channel", "join", "room", "--agent", "bob", "--json"]);
+
+    assert_eq!(
+        owed(&run(&bus, &["awaiting", "alice", "--json"])),
+        vec!["bob".to_string()],
+        "alice's open ask must survive bob's leave/rejoin"
+    );
+    let bob_view = run(&bus, &["awaiting", "bob", "--json"]);
+    let bob_json: serde_json::Value = serde_json::from_slice(&bob_view.stdout).unwrap();
+    assert_eq!(
+        bob_json["you_owe"].as_array().unwrap().len(),
+        1,
+        "bob must still see the ack he owes after rejoining"
+    );
+}
+
+#[test]
 fn channel_leave_unsubscribes_an_agent() {
     let bus = temp_bus();
     run(&bus, &["init"]);

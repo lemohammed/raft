@@ -659,7 +659,13 @@ fn cmd_channel_join(root: &Path, args: ChannelJoinArgs) -> Result<()> {
     if !already_member {
         let now = iso_now();
         meta.participants.push(agent_id.clone());
-        meta.joined_at.insert(agent_id.clone(), now.clone());
+        // Preserve the original join time across a leave/rejoin. Overwriting it
+        // with `now` would push the membership baseline past any ask created
+        // during the prior membership, so `predates_membership` would hide an
+        // undischarged obligation — silently resolving owed work on reconnect.
+        meta.joined_at
+            .entry(agent_id.clone())
+            .or_insert_with(|| now.clone());
         meta.updated_at = now;
         atomic_write_json(&conv.join("meta.json"), &meta)?;
         write_system_message(
@@ -920,7 +926,13 @@ fn cmd_conversation_add(root: &Path, args: ConversationAddArgs) -> Result<()> {
     if !already_participant {
         let now = iso_now();
         meta.participants.push(agent_id.clone());
-        meta.joined_at.insert(agent_id.clone(), now.clone());
+        // Preserve the original join time across a remove/re-add. Overwriting it
+        // with `now` would push the membership baseline past any ask created
+        // during the prior membership, so `predates_membership` would hide an
+        // undischarged obligation — silently resolving owed work on re-add.
+        meta.joined_at
+            .entry(agent_id.clone())
+            .or_insert_with(|| now.clone());
         meta.updated_at = now;
         atomic_write_json(&conv.join("meta.json"), &meta)?;
         write_system_message(

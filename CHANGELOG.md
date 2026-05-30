@@ -11,6 +11,16 @@ shell out to `raft` can branch on results reliably.
 
 ### Fixed
 
+- Rejoining a room (`channel join` / `conversation add` after a `leave`/`remove`)
+  no longer overwrites the agent's `joined_at` membership baseline. `remove`
+  preserves `joined_at`, but the join handlers re-inserted it as `now`, pushing
+  the baseline past any ask created during the prior membership — so
+  `predates_membership` hid the still-unanswered obligation and `message_awaited`
+  dropped the agent. An agent that simply disconnected and reconnected silently
+  discharged owed work: the ask vanished from the asker's `owed_to_you`, the
+  agent's `you_owe`, and `wait --owed`, with no terminal receipt or withdrawal.
+  The baseline is now stamped only on first join and preserved across rejoins,
+  so an open ask correctly reopens when the agent returns.
 - `wait <asker> --resolved <id>` no longer reports a multi-recipient ask as
   resolved the instant the *first* awaited agent answers. For an ask delegated
   to several agents (`--needs-response-from a,b` or a broadcast `--requires-ack`),
