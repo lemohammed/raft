@@ -113,9 +113,6 @@ pub(crate) fn nearest_ids(target: &str, candidates: &[String], limit: usize) -> 
 
 pub(crate) fn validate_claim_name(value: &str) -> Result<String> {
     let agent_id = validate_id(value.trim_start_matches('@'), "agent name")?;
-    if agent_id.len() < 3 {
-        bail!("agent name @{agent_id} is too short; choose a unique, personable name");
-    }
     Ok(agent_id)
 }
 

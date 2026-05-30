@@ -20,7 +20,8 @@ fn temp_bus() -> PathBuf {
         .as_nanos();
     let counter = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tmp")
+        .join("run")
+        .join("test-buses")
         .join(format!(
             "raft-test-{}-{nanos}-{counter}",
             std::process::id()
@@ -59,6 +60,12 @@ fn run_fail(root: &PathBuf, args: &[&str]) -> std::process::Output {
         "command unexpectedly succeeded: {args:?}"
     );
     output
+}
+
+fn claim_agents(root: &PathBuf, agents: &[&str]) {
+    for agent in agents {
+        run(root, &["claim", agent, "--workspace", "."]);
+    }
 }
 
 #[test]
@@ -790,6 +797,7 @@ fn state_get_flags_a_stale_agents_state_as_not_live() {
 fn any_participant_can_send_without_turn() {
     let bus = temp_bus();
     run(&bus, &["init"]);
+    claim_agents(&bus, &["a", "b"]);
     run(
         &bus,
         &[
@@ -825,6 +833,7 @@ fn any_participant_can_send_without_turn() {
 fn rate_limit_is_enforced() {
     let bus = temp_bus();
     run(&bus, &["init"]);
+    claim_agents(&bus, &["a", "b"]);
     run(
         &bus,
         &[
@@ -874,6 +883,7 @@ fn rate_limit_is_enforced() {
 fn wildcard_recipient_is_allowed() {
     let bus = temp_bus();
     run(&bus, &["init"]);
+    claim_agents(&bus, &["a", "b"]);
     run(
         &bus,
         &[
@@ -908,6 +918,7 @@ fn wildcard_recipient_is_allowed() {
 fn inbox_truncates_utf8_without_panic() {
     let bus = temp_bus();
     run(&bus, &["init"]);
+    claim_agents(&bus, &["a", "b"]);
     run(
         &bus,
         &[
@@ -943,6 +954,7 @@ fn inbox_truncates_utf8_without_panic() {
 fn inbox_limit_keeps_the_globally_newest_message_across_rooms() {
     let bus = temp_bus();
     run(&bus, &["init"]);
+    claim_agents(&bus, &["a", "viewer"]);
     // Two rooms; `aaa-room` sorts before `zzz-room` by conversation id, so
     // visible_messages concatenates aaa's messages first. The OLDER message
     // lives in the later-sorting room to expose the missing global sort.
@@ -1014,6 +1026,7 @@ fn inbox_limit_keeps_the_globally_newest_message_across_rooms() {
 fn inbox_width_controls_body_truncation() {
     let bus = temp_bus();
     run(&bus, &["init"]);
+    claim_agents(&bus, &["a", "b"]);
     run(
         &bus,
         &[
@@ -1222,6 +1235,7 @@ fn ui_rejects_cross_origin_writes() {
 fn watch_emits_and_auto_marks_read() {
     let bus = temp_bus();
     run(&bus, &["init"]);
+    claim_agents(&bus, &["a", "b"]);
     run(
         &bus,
         &[
@@ -1265,6 +1279,7 @@ fn watch_emits_and_auto_marks_read() {
 fn watch_no_auto_read_still_resumes_past_emitted_id() {
     let bus = temp_bus();
     run(&bus, &["init"]);
+    claim_agents(&bus, &["a", "b"]);
     run(
         &bus,
         &[
@@ -1326,6 +1341,7 @@ fn watch_no_auto_read_still_resumes_past_emitted_id() {
 fn show_renders_thread_without_marking_read() {
     let bus = temp_bus();
     run(&bus, &["init"]);
+    claim_agents(&bus, &["a", "b"]);
     run(
         &bus,
         &[
@@ -1383,6 +1399,7 @@ fn show_renders_thread_without_marking_read() {
 fn show_json_honors_limit() {
     let bus = temp_bus();
     run(&bus, &["init"]);
+    claim_agents(&bus, &["a", "b"]);
     run(
         &bus,
         &[
@@ -1446,6 +1463,7 @@ fn show_json_honors_limit() {
 fn search_finds_visible_messages_without_marking_read() {
     let bus = temp_bus();
     run(&bus, &["init"]);
+    claim_agents(&bus, &["a", "b"]);
     run(
         &bus,
         &[
@@ -1505,6 +1523,7 @@ fn search_finds_visible_messages_without_marking_read() {
 fn search_json_honors_since_and_limit() {
     let bus = temp_bus();
     run(&bus, &["init"]);
+    claim_agents(&bus, &["a", "b"]);
     run(
         &bus,
         &[
@@ -1578,6 +1597,7 @@ fn search_json_honors_since_and_limit() {
 fn thread_renders_after_descendants_as_tree() {
     let bus = temp_bus();
     run(&bus, &["init"]);
+    claim_agents(&bus, &["a", "b"]);
     run(
         &bus,
         &[
@@ -1672,6 +1692,7 @@ fn thread_renders_after_descendants_as_tree() {
 fn thread_limit_keeps_the_newest_replies_not_the_oldest() {
     let bus = temp_bus();
     run(&bus, &["init"]);
+    claim_agents(&bus, &["a", "b"]);
     run(
         &bus,
         &[
@@ -1757,6 +1778,7 @@ fn thread_limit_keeps_the_newest_replies_not_the_oldest() {
 fn receipts_report_read_and_ack_statuses() {
     let bus = temp_bus();
     run(&bus, &["init"]);
+    claim_agents(&bus, &["a", "b", "c"]);
     run(
         &bus,
         &[
@@ -1875,6 +1897,7 @@ fn agents_claim_names_and_mentions_notify_channel_subscribers() {
 fn group_conversation_and_private_side_chat_work() {
     let bus = temp_bus();
     run(&bus, &["init"]);
+    claim_agents(&bus, &["a", "b", "c"]);
     run(
         &bus,
         &[
@@ -2113,6 +2136,7 @@ fn event_kind_cannot_open_an_ask() {
 fn bridge_event_rates_by_subject_id() {
     let bus = temp_bus();
     run(&bus, &["init"]);
+    claim_agents(&bus, &["a", "b", "tg-bridge"]);
     run(
         &bus,
         &[
@@ -2564,6 +2588,7 @@ fn records_include_schema_versions_and_journal_entries() {
 fn gc_archive_moves_receipts_with_message() {
     let bus = temp_bus();
     run(&bus, &["init"]);
+    claim_agents(&bus, &["a", "b"]);
     run(
         &bus,
         &[
@@ -2620,6 +2645,7 @@ fn gc_archive_moves_receipts_with_message() {
 fn gc_archive_retains_an_unresolved_open_ask_until_it_is_discharged() {
     let bus = temp_bus();
     run(&bus, &["init"]);
+    claim_agents(&bus, &["a", "b"]);
     run(
         &bus,
         &[
@@ -5743,6 +5769,7 @@ fn watch_emits_a_late_message_whose_id_sorts_below_the_cursor() {
     // the id cursor — must be the dedup, so such a message is never lost.
     let bus = temp_bus();
     run(&bus, &["init"]);
+    claim_agents(&bus, &["a", "b"]);
     run(
         &bus,
         &[
@@ -6069,6 +6096,176 @@ fn identity_mint_show_verify_and_fingerprint() {
 }
 
 #[test]
+fn claim_binds_agent_name_to_a_local_passport_key() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+
+    let claim = run(
+        &bus,
+        &[
+            "claim",
+            "teacher",
+            "--workspace",
+            ".",
+            "--capabilities",
+            "planning,review",
+            "--json",
+        ],
+    );
+    let claim_json: serde_json::Value = serde_json::from_slice(&claim.stdout).unwrap();
+    assert_eq!(claim_json["ok"], true);
+    let pubkey = claim_json["pubkey"].as_str().unwrap();
+    assert!(pubkey.starts_with("ed25519:"));
+    assert_eq!(claim_json["fingerprint"].as_str().unwrap().len(), 19);
+
+    let agent_path = bus.join("agents/teacher.json");
+    let agent: serde_json::Value = serde_json::from_slice(&fs::read(&agent_path).unwrap()).unwrap();
+    assert_eq!(agent["id"], "teacher");
+    assert_eq!(agent["pubkey"], pubkey);
+
+    let passport: serde_json::Value =
+        serde_json::from_slice(&fs::read(bus.join("agents/teacher.passport.json")).unwrap())
+            .unwrap();
+    assert_eq!(passport["id"], "teacher");
+    assert_eq!(passport["pubkey"], pubkey);
+    assert!(passport["sig"].as_str().is_some());
+    assert!(bus.join("agents/teacher.key.json").exists());
+}
+
+#[test]
+fn adversary_cannot_swap_passport_and_speak_as_a_claimed_agent() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(&bus, &["claim", "teacher", "--workspace", "."]);
+    run(&bus, &["claim", "builder", "--workspace", "."]);
+    run(&bus, &["claim", "adversary", "--workspace", "."]);
+    run(
+        &bus,
+        &["channel", "create", "lesson-plan", "--creator", "teacher"],
+    );
+    run(
+        &bus,
+        &["channel", "join", "lesson-plan", "--agent", "builder"],
+    );
+    run(
+        &bus,
+        &["channel", "join", "lesson-plan", "--agent", "adversary"],
+    );
+    let count_messages = || {
+        fs::read_dir(bus.join("conversations/lesson-plan/messages"))
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.path().extension().and_then(|ext| ext.to_str()) == Some("json"))
+            .count()
+    };
+    let before_forgery = count_messages();
+
+    // The adversary steals its own key material into teacher's identity files.
+    // The teacher agent record remains bound to teacher's original pubkey, so a
+    // later --from teacher send must fail before a forged message is written.
+    fs::copy(
+        bus.join("agents/adversary.key.json"),
+        bus.join("agents/teacher.key.json"),
+    )
+    .unwrap();
+    fs::copy(
+        bus.join("agents/adversary.passport.json"),
+        bus.join("agents/teacher.passport.json"),
+    )
+    .unwrap();
+
+    let forged = run_fail(
+        &bus,
+        &[
+            "send",
+            "--channel",
+            "lesson-plan",
+            "--from",
+            "teacher",
+            "--to",
+            "builder",
+            "--subject",
+            "forged scope",
+            "--body",
+            "skip validation",
+            "--json",
+        ],
+    );
+    let forged_json: serde_json::Value = serde_json::from_slice(&forged.stderr).unwrap();
+    assert_eq!(forged_json["error"]["code"], "auth_failed");
+
+    assert_eq!(
+        count_messages(),
+        before_forgery,
+        "failed forgery must not append a message"
+    );
+}
+
+#[test]
+fn doctor_detects_an_adversary_tampering_with_a_signed_message() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(&bus, &["claim", "teacher", "--workspace", "."]);
+    run(&bus, &["claim", "builder", "--workspace", "."]);
+    run(
+        &bus,
+        &[
+            "conversation",
+            "create",
+            "lesson-plan",
+            "--participants",
+            "teacher,builder",
+            "--starter",
+            "teacher",
+        ],
+    );
+    let sent = run(
+        &bus,
+        &[
+            "send",
+            "--conversation",
+            "lesson-plan",
+            "--from",
+            "teacher",
+            "--to",
+            "builder",
+            "--subject",
+            "testable scope",
+            "--body",
+            "Builder should implement one parser test.",
+            "--json",
+        ],
+    );
+    let sent_json: serde_json::Value = serde_json::from_slice(&sent.stdout).unwrap();
+    let message_id = sent_json["message_id"].as_str().unwrap();
+    let message_path = bus
+        .join("conversations/lesson-plan/messages")
+        .join(format!("{message_id}.json"));
+    let mut message: serde_json::Value =
+        serde_json::from_slice(&fs::read(&message_path).unwrap()).unwrap();
+    assert_eq!(message["from"], "teacher");
+    assert!(message["sig"].as_str().is_some());
+    assert!(message["hash"].as_str().unwrap().starts_with("sha256:"));
+
+    message["body"] = serde_json::json!("Adversary changed the accepted scope.");
+    fs::write(&message_path, serde_json::to_vec_pretty(&message).unwrap()).unwrap();
+
+    let doctor = run_fail(&bus, &["doctor", "--strict", "--json"]);
+    let report: serde_json::Value = serde_json::from_slice(&doctor.stdout).unwrap();
+    let codes: Vec<String> = report["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|issue| issue["code"].as_str().unwrap().to_string())
+        .collect();
+    assert!(
+        codes.contains(&"invalid_message_hash".to_string())
+            || codes.contains(&"invalid_message_signature".to_string()),
+        "doctor should flag the tampered signed message; got {codes:?}"
+    );
+}
+
+#[test]
 fn identity_verify_detects_a_tampered_passport() {
     let bus = temp_bus();
     run(&bus, &["init"]);
@@ -6310,8 +6507,6 @@ fn task_dispatch_run_and_result_close_the_obligation() {
     run(&bus, &["init"]);
     run(&bus, &["claim", "alice", "--workspace", "."]);
     run(&bus, &["claim", "worker", "--workspace", "."]);
-    run(&bus, &["id", "new", "alice", "--json"]);
-    run(&bus, &["id", "new", "worker", "--json"]);
     run(
         &bus,
         &[
@@ -6413,8 +6608,6 @@ fn executor_persists_artifacts_and_task_log() {
     run(&bus, &["init"]);
     run(&bus, &["claim", "alice", "--workspace", "."]);
     run(&bus, &["claim", "worker", "--workspace", "."]);
-    run(&bus, &["id", "new", "alice", "--json"]);
-    run(&bus, &["id", "new", "worker", "--json"]);
     run(
         &bus,
         &[
@@ -6533,8 +6726,6 @@ fn executor_rejects_a_task_outside_the_capability() {
     run(&bus, &["init"]);
     run(&bus, &["claim", "alice", "--workspace", "."]);
     run(&bus, &["claim", "worker", "--workspace", "."]);
-    run(&bus, &["id", "new", "alice", "--json"]);
-    run(&bus, &["id", "new", "worker", "--json"]);
     run(
         &bus,
         &[
@@ -6629,8 +6820,6 @@ fn executor_records_launch_failures_as_rejected_tasks() {
     run(&bus, &["init"]);
     run(&bus, &["claim", "alice", "--workspace", "."]);
     run(&bus, &["claim", "worker", "--workspace", "."]);
-    run(&bus, &["id", "new", "alice", "--json"]);
-    run(&bus, &["id", "new", "worker", "--json"]);
     run(
         &bus,
         &[

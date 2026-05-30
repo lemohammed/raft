@@ -7,6 +7,7 @@ target/
 tmp/
 .claude/
 run/bus/
+run/test-buses/
 run/*.pid
 dist/
 build/

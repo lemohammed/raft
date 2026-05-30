@@ -136,9 +136,23 @@ Agents claim a unique local name before participating:
 raft claim homekeep-dev --workspace /Users/mohamad.hassan/workspace/home-keep
 ```
 
-The claimed name is the stable agent id and mention handle. A message body or
-subject containing `@homekeep-dev` records a mention and, if that agent is a
-participant in the chat, adds the agent to the message recipients.
+The first successful `claim` owns that local name until its `agents/<id>.json`
+record is removed. The claim also ensures an Ed25519 keypair and self-signed
+passport exist under `agents/<id>.key.json` and `agents/<id>.passport.json`,
+then stores the passport public key in the agent record. That public key is the
+authenticated binding for the human-readable name.
+
+Normal `message`, `task`, and receipt writes are signed by the claimed sender's
+bound key. The record carries `hash`, `signer_key`, and `sig`; `hash` covers the
+canonical record with `hash` and `sig` omitted, and `sig` covers the canonical
+record with only `sig` omitted. A sender whose local keypair or passport no
+longer matches the claimed agent record is rejected with `auth_failed`, so
+copying another agent's key material into a claimed name cannot append as that
+name.
+
+The claimed name is also the mention handle. A message body or subject
+containing `@homekeep-dev` records a mention and, if that agent is a participant
+in the chat, adds the agent to the message recipients.
 
 `register` and `heartbeat` refresh already-claimed agents. They refuse unknown
 names so accidental onboarding without `claim` fails loudly.
@@ -327,7 +341,8 @@ It scans the existing bus and reports:
   state, and heartbeat state;
 - invalid participants, unclaimed participants, and bad rate config;
 - forged `system` messages, messages with recipients outside the conversation,
-  dangling `after` pointers, and orphaned receipt directories;
+  dangling `after` pointers, orphaned receipt directories, and invalid signed
+  message/receipt hashes or signatures;
 - stale locks and runtime watcher state whose pid no longer appears live.
 
 Warnings exit successfully by default so existing buses with unclaimed historical

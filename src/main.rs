@@ -23,6 +23,7 @@ use crate::util::*;
 use crate::wakeup::Waker;
 use chrono::{DateTime, TimeDelta, Utc};
 use clap::Parser;
+use serde::Serialize;
 use signal_hook::consts::signal::{SIGINT, SIGTERM};
 use signal_hook::flag as signal_flag;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -937,7 +938,7 @@ fn cmd_id_new(root: &Path, args: IdNewArgs) -> Result<()> {
     if args.json {
         emit_ok(serde_json::json!({
             "agent": agent_id,
-            "pubkey": passport.pubkey,
+            "pubkey": passport.pubkey.clone(),
             "fingerprint": fingerprint(&passport.pubkey),
             "capabilities": passport.capabilities,
             "issued_at": passport.issued_at,
@@ -1068,6 +1069,54 @@ fn fingerprint(pubkey: &str) -> String {
         .join("-")
 }
 
+fn agent_signing_key(root: &Path, agent_id: &str) -> Result<(String, crypto::Keypair)> {
+    let agent: Agent =
+        read_json(&agent_path(root, agent_id))?.ok_or_else(|| not_claimed(root, agent_id))?;
+    let pubkey = agent.pubkey.ok_or_else(|| {
+        RaftError::coded(
+            "auth_failed",
+            format!(
+                "agent @{agent_id} is not bound to a passport key; run `raft register {agent_id}`"
+            ),
+        )
+    })?;
+    let keypair = identity::load_bound_keypair(root, agent_id, &pubkey)?;
+    Ok((pubkey, keypair))
+}
+
+fn signed_record_hash<T: Serialize>(record: &T) -> Result<String> {
+    let value = serde_json::to_value(record)?;
+    Ok(crypto::sha256_hex(&crypto::canonical_omitting(
+        &value,
+        &["hash", "sig"],
+    )?))
+}
+
+fn signed_record_signature<T: Serialize>(keypair: &crypto::Keypair, record: &T) -> Result<String> {
+    let value = serde_json::to_value(record)?;
+    Ok(keypair.sign(&crypto::canonical_omitting(&value, &["sig"])?))
+}
+
+fn sign_message(root: &Path, sender: &str, message: &mut Message) -> Result<()> {
+    let (pubkey, keypair) = agent_signing_key(root, sender)?;
+    message.signer_key = Some(pubkey);
+    message.hash = None;
+    message.sig = None;
+    message.hash = Some(signed_record_hash(message)?);
+    message.sig = Some(signed_record_signature(&keypair, message)?);
+    Ok(())
+}
+
+fn sign_receipt(root: &Path, agent_id: &str, receipt: &mut Receipt) -> Result<()> {
+    let (pubkey, keypair) = agent_signing_key(root, agent_id)?;
+    receipt.signer_key = Some(pubkey);
+    receipt.hash = None;
+    receipt.sig = None;
+    receipt.hash = Some(signed_record_hash(receipt)?);
+    receipt.sig = Some(signed_record_signature(&keypair, receipt)?);
+    Ok(())
+}
+
 fn root_path(root: Option<PathBuf>) -> Result<PathBuf> {
     if let Some(path) = root {
         return Ok(path);
@@ -1149,12 +1198,15 @@ fn cmd_claim(root: &Path, args: ClaimArgs) -> Result<()> {
         bail_code!("conflict", "agent name @{agent_id} is already claimed");
     }
     let workspace = args.workspace.map(|path| resolve_path(&path)).transpose()?;
+    let capabilities = split_csv(&args.capabilities)?;
+    let passport = identity::ensure_identity(root, &agent_id, &capabilities)?;
     let payload = Agent {
         v: SCHEMA_VERSION,
         id: agent_id.clone(),
         mention: format!("@{agent_id}"),
         workspace,
-        capabilities: split_csv(&args.capabilities)?,
+        capabilities,
+        pubkey: Some(passport.pubkey.clone()),
         pid: process::id(),
         host: hostname(),
         last_seen_at: iso_now(),
@@ -1169,6 +1221,8 @@ fn cmd_claim(root: &Path, args: ClaimArgs) -> Result<()> {
         emit_ok(serde_json::json!({
             "agent": agent_id,
             "mention": payload.mention,
+            "pubkey": passport.pubkey.clone(),
+            "fingerprint": fingerprint(&passport.pubkey),
             "expires_at": payload.expires_at,
             "root": root.display().to_string(),
         }))?;
@@ -1202,12 +1256,14 @@ fn cmd_register(root: &Path, args: RegisterArgs) -> Result<()> {
             parsed
         }
     };
+    let passport = identity::ensure_identity(root, &agent_id, &capabilities)?;
     let payload = Agent {
         v: SCHEMA_VERSION,
         id: agent_id.clone(),
         mention: format!("@{agent_id}"),
         workspace,
         capabilities,
+        pubkey: Some(passport.pubkey.clone()),
         pid: process::id(),
         host: hostname(),
         last_seen_at: iso_now(),
@@ -1222,6 +1278,8 @@ fn cmd_register(root: &Path, args: RegisterArgs) -> Result<()> {
         emit_ok(serde_json::json!({
             "agent": agent_id,
             "mention": payload.mention,
+            "pubkey": passport.pubkey.clone(),
+            "fingerprint": fingerprint(&passport.pubkey),
             "expires_at": payload.expires_at,
             "root": root.display().to_string(),
         }))?;
@@ -1263,12 +1321,17 @@ fn heartbeat_once(
     let previous: Agent =
         read_json(&agent_path(root, agent_id))?.ok_or_else(|| not_claimed(root, &agent_id))?;
     let ttl = ttl_override.unwrap_or(previous.ttl_seconds);
+    let pubkey = match previous.pubkey {
+        Some(pubkey) => Some(pubkey),
+        None => Some(identity::ensure_identity(root, agent_id, &previous.capabilities)?.pubkey),
+    };
     let payload = Agent {
         v: SCHEMA_VERSION,
         id: agent_id.to_string(),
         mention: format!("@{agent_id}"),
         workspace: previous.workspace,
         capabilities: previous.capabilities,
+        pubkey,
         pid: process::id(),
         host: hostname(),
         last_seen_at: iso_now(),
@@ -1368,12 +1431,17 @@ fn cmd_state_set(root: &Path, args: StateSetArgs) -> Result<()> {
         read_json(&agent_path(root, &agent_id))?.ok_or_else(|| not_claimed(root, &agent_id))?;
     let changed = previous.current_state != state || previous.state_note != args.note;
     let now = iso_now();
+    let pubkey = match previous.pubkey {
+        Some(pubkey) => Some(pubkey),
+        None => Some(identity::ensure_identity(root, &agent_id, &previous.capabilities)?.pubkey),
+    };
     let payload = Agent {
         v: SCHEMA_VERSION,
         id: agent_id.clone(),
         mention: format!("@{agent_id}"),
         workspace: previous.workspace,
         capabilities: previous.capabilities,
+        pubkey,
         pid: process::id(),
         host: hostname(),
         last_seen_at: now.clone(),
@@ -2243,6 +2311,7 @@ fn cmd_withdraw(root: &Path, args: WithdrawArgs) -> Result<()> {
         at: at.clone(),
         reason: args.reason.clone(),
     });
+    sign_message(root, &asker, &mut message)?;
     atomic_write_json(&path, &message)?;
     // Drop a discoverable lifecycle notice for the released workers, mirroring
     // the `participant removed`/`channel left`/`state changed` notices. Without
@@ -2356,7 +2425,7 @@ pub(crate) fn send_message_locked(root: &Path, input: SendMessageInput) -> Resul
     enforce_rate_limit(&conv, &meta, &sender, subject_id.as_deref(), &input.body)?;
 
     let message_id = new_message_id();
-    let message = Message {
+    let mut message = Message {
         v: SCHEMA_VERSION,
         id: message_id.clone(),
         conversation_id: meta.id.clone(),
@@ -2371,8 +2440,12 @@ pub(crate) fn send_message_locked(root: &Path, input: SendMessageInput) -> Resul
         needs_response_from,
         subject_id,
         after,
+        hash: None,
+        signer_key: None,
+        sig: None,
         withdrawn: None,
     };
+    sign_message(root, &sender, &mut message)?;
     atomic_write_json(
         &conv.join("messages").join(format!("{message_id}.json")),
         &message,
@@ -4510,6 +4583,9 @@ fn write_receipt(
         note: note.clone(),
         read_at: None,
         history: Vec::new(),
+        hash: None,
+        signer_key: None,
+        sig: None,
     });
     receipt.history.push(ReceiptEvent {
         status: status.to_string(),
@@ -4537,6 +4613,7 @@ fn write_receipt(
     if status == "read" && receipt.read_at.is_none() {
         receipt.read_at = Some(iso_now());
     }
+    sign_receipt(root, agent_id, &mut receipt)?;
     atomic_write_json(&path, &receipt)?;
     Ok(receipt.status)
 }
@@ -4694,6 +4771,9 @@ pub(crate) fn write_system_message(
         needs_response_from: Vec::new(),
         subject_id: None,
         after: None,
+        hash: None,
+        signer_key: None,
+        sig: None,
         withdrawn: None,
     };
     atomic_write_json(

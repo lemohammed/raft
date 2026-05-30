@@ -104,6 +104,83 @@ pub(crate) fn create_identity(root: &Path, id: &str, capabilities: &[String]) ->
     Ok(passport)
 }
 
+/// Ensure `id` has local signing material and a valid self-signed passport,
+/// creating both on first claim. Existing keys are never overwritten.
+pub(crate) fn ensure_identity(root: &Path, id: &str, capabilities: &[String]) -> Result<Passport> {
+    if let Some(passport) = load_passport(root, id)? {
+        verify_local_identity(root, id, &passport)?;
+        return Ok(passport);
+    }
+    if let Some(keypair) = load_keypair(root, id)? {
+        let passport = sign_passport(&keypair, id, capabilities, iso_now())?;
+        atomic_write_json(&passport_path(root, id), &passport)?;
+        return Ok(passport);
+    }
+    create_identity(root, id, capabilities)
+}
+
+/// Verify that the passport and local keypair both bind to `id` and to the same
+/// public key. Returns the signing keypair for records that need authentication.
+pub(crate) fn load_bound_keypair(root: &Path, id: &str, expected_pubkey: &str) -> Result<Keypair> {
+    let passport = load_passport(root, id)?.ok_or_else(|| {
+        RaftError::coded(
+            "auth_failed",
+            format!("no passport for @{id}; run `raft id new {id}` or re-claim the agent"),
+        )
+    })?;
+    verify_local_identity(root, id, &passport)?;
+    if passport.pubkey != expected_pubkey {
+        return Err(RaftError::coded(
+            "auth_failed",
+            format!("passport for @{id} no longer matches the claimed agent key"),
+        ));
+    }
+    let keypair = load_keypair(root, id)?.ok_or_else(|| {
+        RaftError::coded(
+            "auth_failed",
+            format!("no local keypair for @{id}; cannot sign as this agent"),
+        )
+    })?;
+    if keypair.public_hex() != expected_pubkey {
+        return Err(RaftError::coded(
+            "auth_failed",
+            format!("local keypair for @{id} does not match the claimed agent key"),
+        ));
+    }
+    Ok(keypair)
+}
+
+fn verify_local_identity(root: &Path, id: &str, passport: &Passport) -> Result<()> {
+    passport.verify().map_err(|err| {
+        RaftError::coded(
+            "auth_failed",
+            format!("passport for @{id} failed verification: {}", err.message),
+        )
+    })?;
+    if passport.id != id {
+        return Err(RaftError::coded(
+            "auth_failed",
+            format!(
+                "passport file for @{id} is bound to @{} instead",
+                passport.id
+            ),
+        ));
+    }
+    let keypair = load_keypair(root, id)?.ok_or_else(|| {
+        RaftError::coded(
+            "auth_failed",
+            format!("no local keypair for @{id}; cannot authenticate this claim"),
+        )
+    })?;
+    if keypair.public_hex() != passport.pubkey {
+        return Err(RaftError::coded(
+            "auth_failed",
+            format!("local keypair for @{id} does not match its passport"),
+        ));
+    }
+    Ok(())
+}
+
 /// Build and self-sign a passport with an explicit issue time (factored out so
 /// tests and re-issuance share one signing path).
 fn sign_passport(

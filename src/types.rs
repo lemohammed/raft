@@ -12,6 +12,8 @@ pub(crate) struct Agent {
     pub(crate) mention: String,
     pub(crate) workspace: Option<String>,
     pub(crate) capabilities: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) pubkey: Option<String>,
     pub(crate) pid: u32,
     pub(crate) host: String,
     pub(crate) last_seen_at: String,
@@ -75,6 +77,12 @@ pub(crate) struct Message {
     #[serde(default)]
     pub(crate) subject_id: Option<String>,
     pub(crate) after: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) signer_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) sig: Option<String>,
     /// Set when the sender retracts an ask it opened. Once present, the message
     /// is no longer an open ask: it drops out of every `awaited` computation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -151,6 +159,12 @@ pub(crate) struct Receipt {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) read_at: Option<String>,
     pub(crate) history: Vec<ReceiptEvent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) signer_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) sig: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]

@@ -1,5 +1,6 @@
 use crate::SCHEMA_VERSION;
 use crate::cli::DoctorArgs;
+use crate::crypto;
 use crate::error::Result;
 use crate::receipt_recipients;
 use crate::storage::{collect_orphan_temp_files, is_agent_record_file};
@@ -8,6 +9,7 @@ use crate::util::{parse_time, process_is_alive, validate_agent_state, validate_i
 use chrono::Utc;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+use serde_json::Value;
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
 use std::fs::{self, File};
@@ -230,6 +232,19 @@ fn doctor_scan_agents(root: &Path, report: &mut DoctorReport) -> BTreeSet<String
             "state_updated_at",
             &agent.state_updated_at,
         );
+        match agent.pubkey.as_deref() {
+            Some(pubkey) => {
+                if let Err(err) = crypto::parse_pubkey(pubkey) {
+                    report.error(root, &path, "invalid_agent_pubkey", err.to_string());
+                }
+            }
+            None => report.warn(
+                root,
+                &path,
+                "agent_missing_pubkey",
+                "claimed agent is not bound to a passport public key",
+            ),
+        }
         if let Err(err) = validate_agent_state(&agent.current_state) {
             report.error(root, &path, "invalid_agent_state", err.to_string());
         }
@@ -608,6 +623,19 @@ fn doctor_check_message(
             "message requires ack but has no recipient other than sender",
         );
     }
+    if message.kind != "system" {
+        doctor_check_signed_record(
+            root,
+            report,
+            path,
+            "message",
+            &message.from,
+            message.signer_key.as_deref(),
+            message.hash.as_deref(),
+            message.sig.as_deref(),
+            message,
+        );
+    }
 }
 
 fn doctor_scan_receipts(
@@ -730,6 +758,171 @@ fn doctor_check_receipt(
     }
     for event in &receipt.history {
         doctor_check_time(root, path, report, "history.at", &event.at);
+    }
+    doctor_check_signed_record(
+        root,
+        report,
+        path,
+        "receipt",
+        &receipt.agent,
+        receipt.signer_key.as_deref(),
+        receipt.hash.as_deref(),
+        receipt.sig.as_deref(),
+        receipt,
+    );
+}
+
+fn doctor_check_signed_record<T: Serialize>(
+    root: &Path,
+    report: &mut DoctorReport,
+    path: &Path,
+    record_type: &str,
+    author: &str,
+    signer_key: Option<&str>,
+    hash: Option<&str>,
+    sig: Option<&str>,
+    record: &T,
+) {
+    let Some(author_pubkey) = doctor_agent_pubkey(root, report, path, author) else {
+        if signer_key.is_some() || hash.is_some() || sig.is_some() {
+            report.warn(
+                root,
+                path,
+                &format!("unverified_{record_type}_signature"),
+                format!(
+                    "cannot verify {record_type} signature because @{author} has no claimed pubkey"
+                ),
+            );
+        }
+        return;
+    };
+    let Some(signer_key) = signer_key else {
+        report.error(
+            root,
+            path,
+            &format!("missing_{record_type}_signer"),
+            format!("{record_type} by @{author} is missing signer_key"),
+        );
+        return;
+    };
+    if signer_key != author_pubkey {
+        report.error(
+            root,
+            path,
+            &format!("{record_type}_signer_mismatch"),
+            format!("{record_type} signer key does not match @{author}'s claimed pubkey"),
+        );
+        return;
+    }
+    let Some(hash) = hash else {
+        report.error(
+            root,
+            path,
+            &format!("missing_{record_type}_hash"),
+            format!("{record_type} by @{author} is missing hash"),
+        );
+        return;
+    };
+    let Some(sig) = sig else {
+        report.error(
+            root,
+            path,
+            &format!("missing_{record_type}_signature"),
+            format!("{record_type} by @{author} is missing sig"),
+        );
+        return;
+    };
+    let value = match serde_json::to_value(record) {
+        Ok(value) => value,
+        Err(err) => {
+            report.error(
+                root,
+                path,
+                &format!("{record_type}_signature_encode_failed"),
+                err.to_string(),
+            );
+            return;
+        }
+    };
+    doctor_check_record_hash(root, report, path, record_type, hash, &value);
+    let signing_bytes = match crypto::canonical_omitting(&value, &["sig"]) {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            report.error(
+                root,
+                path,
+                &format!("{record_type}_signature_encode_failed"),
+                err.to_string(),
+            );
+            return;
+        }
+    };
+    if let Err(err) = crypto::verify(signer_key, &signing_bytes, sig) {
+        report.error(
+            root,
+            path,
+            &format!("invalid_{record_type}_signature"),
+            err.to_string(),
+        );
+    }
+}
+
+fn doctor_check_record_hash(
+    root: &Path,
+    report: &mut DoctorReport,
+    path: &Path,
+    record_type: &str,
+    hash: &str,
+    value: &Value,
+) {
+    let hash_bytes = match crypto::canonical_omitting(value, &["hash", "sig"]) {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            report.error(
+                root,
+                path,
+                &format!("{record_type}_hash_encode_failed"),
+                err.to_string(),
+            );
+            return;
+        }
+    };
+    let expected = crypto::sha256_hex(&hash_bytes);
+    if hash != expected {
+        report.error(
+            root,
+            path,
+            &format!("invalid_{record_type}_hash"),
+            format!("stored hash {hash:?} does not match canonical {expected:?}"),
+        );
+    }
+}
+
+fn doctor_agent_pubkey(
+    root: &Path,
+    report: &mut DoctorReport,
+    signed_record_path: &Path,
+    agent_id: &str,
+) -> Option<String> {
+    let agent_path = root.join("agents").join(format!("{agent_id}.json"));
+    let Some(agent) = doctor_read_json::<Agent>(root, &agent_path, report) else {
+        return None;
+    };
+    match agent.pubkey {
+        Some(pubkey) => {
+            if let Err(err) = crypto::parse_pubkey(&pubkey) {
+                report.error(
+                    root,
+                    signed_record_path,
+                    "invalid_agent_pubkey",
+                    format!("cannot verify @{agent_id}: {err}"),
+                );
+                None
+            } else {
+                Some(pubkey)
+            }
+        }
+        None => None,
     }
 }
 
