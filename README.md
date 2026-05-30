@@ -302,7 +302,10 @@ raft watch --agent codex --state-changes --once
 
 Presence is part of the protocol surface. A live agent is one whose heartbeat
 lease has not expired; what it is doing comes from `current_state` and
-`state_note`. `raft roster` and the web UI surface this as a live-agent roster
+`state_note`. `raft state get` joins that liveness onto the published state
+(`live` plus `last_seen_at`/`expires_at` in `--json`, a `(stale)` marker in
+text) so a crashed agent's leftover `working` is not mistaken for the current
+truth. `raft roster` and the web UI surface this as a live-agent roster
 with per-agent owes/waiting counts, so operators can see who is active, who is
 blocked, and what each agent is working on without opening every chat:
 
@@ -444,6 +447,7 @@ itself is the success signal and a missing/empty result is not a failure.
 | `watch` | newline-delimited viewer-relative message objects (NDJSON) | one JSON object per line (message plus `unread`/`awaiting_me`/`my_status`), streamed as messages arrive |
 | `me`, `awaiting` | object `{"agent", "you_owe":[…], "owed_to_you":[…], …}` | `me` adds `unread`, `live_peers`, `conversations` |
 | `roster`, `status` | object `{"root", "agents":[…], …}` | each agent carries `capabilities[]`; `status` adds `conversations` |
+| `state get` | object `{"agent", "state", "note", "updated_at", "live", "last_seen_at", "expires_at"}` | `live` is the heartbeat-lease check (`roster`/`me` semantics), so a stale agent's leftover `state` is not read as current |
 | `thread` | object `{"message", "children":[…], "truncated", "omitted"}` | `children` is a recursive list of the same node shape; when more than `--limit` messages are reachable the *newest* are kept (root always survives, dropped replies re-parent onto their nearest surviving ancestor) and `omitted` counts the rest, mirroring `show`/`inbox`/`search` |
 | `receipts` | object `{"message", "recipients":[…], "receipts":{…}}` | `receipts` keyed by agent id |
 

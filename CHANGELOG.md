@@ -90,6 +90,12 @@ shell out to `raft` can branch on results reliably.
 
 ### Added
 
+- `state get` now reports liveness alongside the published state: `live`
+  (heartbeat lease not expired, same check as `roster`/`me`) plus
+  `last_seen_at` and `expires_at` in `--json`, and a `(stale)` marker in text.
+  A crashed or exited agent leaves its last `current_state` on disk, so a bare
+  `state get` previously presented e.g. `working` as authoritative with no way
+  to tell it apart from a live agent's current state.
 - Channels and conversations now record a per-member `joined_at` baseline, so a
   late joiner is no longer flooded with the room's entire pre-join history. A
   broadcast (`--to "*"`) is visible to every current member, and membership was

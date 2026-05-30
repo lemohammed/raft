@@ -508,6 +508,14 @@ fn cmd_state_get(root: &Path, args: StateGetArgs) -> Result<()> {
     ensure_root(root)?;
     let agent: Agent = read_json(&agent_path(root, &agent_id))?
         .ok_or_else(|| not_claimed(root, &agent_id))?;
+    // A crashed or exited agent leaves its last `current_state` on disk
+    // unchanged, so a bare `state get` would report e.g. `working` as if it
+    // were authoritative. Join the same liveness signal `roster`/`me` use
+    // (heartbeat TTL not yet expired) so a reader can tell a current state from
+    // a stale one before acting on it.
+    let live = parse_time(&agent.expires_at)
+        .map(|expires_at| expires_at >= Utc::now())
+        .unwrap_or(false);
     if args.json {
         println!(
             "{}",
@@ -515,19 +523,24 @@ fn cmd_state_get(root: &Path, args: StateGetArgs) -> Result<()> {
                 "agent": agent.id,
                 "state": agent.current_state,
                 "note": agent.state_note,
-                "updated_at": agent.state_updated_at
+                "updated_at": agent.state_updated_at,
+                "live": live,
+                "last_seen_at": agent.last_seen_at,
+                "expires_at": agent.expires_at,
             }))?
         );
-    } else if let Some(note) = agent.state_note {
-        println!(
-            "@{} {} since {} — {}",
-            agent.id, agent.current_state, agent.state_updated_at, note
-        );
     } else {
-        println!(
-            "@{} {} since {}",
-            agent.id, agent.current_state, agent.state_updated_at
-        );
+        let staleness = if live { "" } else { " (stale)" };
+        match agent.state_note {
+            Some(note) => println!(
+                "@{} {}{} since {} — {}",
+                agent.id, agent.current_state, staleness, agent.state_updated_at, note
+            ),
+            None => println!(
+                "@{} {}{} since {}",
+                agent.id, agent.current_state, staleness, agent.state_updated_at
+            ),
+        }
     }
     Ok(())
 }

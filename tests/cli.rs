@@ -613,6 +613,37 @@ fn state_set_get_and_watch_state_changes_work() {
 }
 
 #[test]
+fn state_get_flags_a_stale_agents_state_as_not_live() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(&bus, &["claim", "worker", "--workspace", "."]);
+    run(&bus, &["state", "set", "worker", "working", "--note", "on it"]);
+
+    // A freshly-claimed, heartbeating agent reads as live.
+    let fresh = run(&bus, &["state", "get", "worker", "--json"]);
+    let fresh_json: serde_json::Value = serde_json::from_slice(&fresh.stdout).unwrap();
+    assert_eq!(fresh_json["state"], "working");
+    assert_eq!(fresh_json["live"], true);
+
+    // Expire the heartbeat: the on-disk `current_state` is unchanged, but the
+    // agent is gone, so `state get` must report it as not live (text marks it
+    // `(stale)`) rather than presenting `working` as authoritative.
+    let path = bus.join("agents").join("worker.json");
+    let mut agent: serde_json::Value =
+        serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    agent["expires_at"] = serde_json::json!("2000-01-01T00:00:00Z");
+    fs::write(&path, serde_json::to_vec(&agent).unwrap()).unwrap();
+
+    let stale = run(&bus, &["state", "get", "worker", "--json"]);
+    let stale_json: serde_json::Value = serde_json::from_slice(&stale.stdout).unwrap();
+    assert_eq!(stale_json["state"], "working");
+    assert_eq!(stale_json["live"], false);
+
+    let stale_text = run(&bus, &["state", "get", "worker"]);
+    assert!(String::from_utf8_lossy(&stale_text.stdout).contains("(stale)"));
+}
+
+#[test]
 fn any_participant_can_send_without_turn() {
     let bus = temp_bus();
     run(&bus, &["init"]);
