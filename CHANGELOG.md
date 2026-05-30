@@ -11,6 +11,17 @@ shell out to `raft` can branch on results reliably.
 
 ### Fixed
 
+- Removing an agent from a room (`conversation remove` / `channel leave`) now
+  releases any open ask still awaiting them. A removed agent cannot ack or reply
+  (`write_receipt`/`send` reject non-participants), but the ask stayed open and
+  unresolvable: the asker's `owed_to_you` reported the removed agent with a
+  false `awaited_live:true`, `roster` kept counting the owes/waiting, the
+  removed agent couldn't even see the obligation (`gather_open_asks` skips rooms
+  it left), and `wait --owed` blocked until timeout on a reply that could never
+  come. `message_awaited` now drops awaited agents who are no longer
+  participants, so the obligation resolves the moment they leave (the removal
+  already posts a `participant removed` system notice). When several agents were
+  awaited, only the departed one is released; the rest stay open.
 - `inbox --limit` now keeps the globally newest messages. `visible_messages`
   concatenates each conversation's messages in conversation-id order, so the
   merged list was sorted only *within* a room; `inbox` then kept the trailing

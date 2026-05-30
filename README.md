@@ -105,7 +105,9 @@ When an agent is done in a room, drop them with `conversation remove` (or
 `false` on a repeat), refuse to remove the last participant, and reject
 cross-type usage (a channel points you at `channel leave`, a private
 conversation at `conversation remove`). A removed agent can no longer send
-until re-added:
+until re-added; any open ask still awaiting them is released (they could
+never ack or reply once removed), so the asker's `owed_to_you`/`wait --owed`
+stops blocking on a response that can no longer arrive:
 
 ```sh
 raft conversation remove codex-homekeep-dev --agent qa-agent --json

@@ -1453,6 +1453,16 @@ fn message_awaited(message: &Message, meta: &Meta) -> Vec<String> {
             agent != &message.from
                 && agent != "*"
                 && !predates_membership(meta, message, agent)
+                // An agent removed from the room (`conversation remove` /
+                // `channel leave`) can no longer ack or reply — `write_receipt`
+                // and `send` reject non-participants. Keeping them awaited left
+                // the ask permanently open: the asker's `owed_to_you` showed a
+                // false `awaited_live`, `wait --owed` blocked forever, and the
+                // removed agent (skipped by `gather_open_asks`) couldn't even
+                // see it. Drop awaited agents who are no longer participants so
+                // the obligation resolves; the removal already posts a
+                // `participant removed` system notice to the room.
+                && meta.participants.iter().any(|participant| participant == agent)
         })
         .collect()
 }

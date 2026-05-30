@@ -3001,6 +3001,65 @@ fn conversation_remove_drops_a_participant_and_blocks_their_sends() {
 }
 
 #[test]
+fn removing_an_awaited_participant_releases_the_open_ask() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(&bus, &["claim", "alice", "--workspace", "."]);
+    run(&bus, &["claim", "bob", "--workspace", "."]);
+    run(&bus, &["claim", "carol", "--workspace", "."]);
+    run(
+        &bus,
+        &[
+            "conversation", "create", "proj", "--participants", "alice,bob,carol",
+            "--starter", "alice",
+        ],
+    );
+    // Alice asks both bob and carol for a response.
+    run(
+        &bus,
+        &[
+            "send", "--conversation", "proj", "--from", "alice", "--to", "bob,carol",
+            "--subject", "Q", "--body", "please respond",
+            "--needs-response-from", "bob,carol",
+        ],
+    );
+
+    let owed = |out: &std::process::Output| -> Vec<String> {
+        let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        v["owed_to_you"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|ask| ask["awaited"].as_str().unwrap().to_string())
+            .collect()
+    };
+
+    // Both bob and carol are owed.
+    let before = run(&bus, &["awaiting", "alice", "--json"]);
+    let mut before_awaited = owed(&before);
+    before_awaited.sort();
+    assert_eq!(before_awaited, vec!["bob".to_string(), "carol".to_string()]);
+
+    // Removing carol releases only carol's obligation; bob's stays open.
+    run(&bus, &["conversation", "remove", "proj", "--agent", "carol", "--json"]);
+    let after = run(&bus, &["awaiting", "alice", "--json"]);
+    assert_eq!(owed(&after), vec!["bob".to_string()]);
+
+    // Removing bob too leaves no open ask, so `wait --owed` resolves instead of
+    // blocking forever on a reply that can never come.
+    run(&bus, &["conversation", "remove", "proj", "--agent", "bob", "--json"]);
+    let drained = run(&bus, &["awaiting", "alice", "--json"]);
+    assert!(owed(&drained).is_empty());
+    let waited = run(
+        &bus,
+        &["wait", "alice", "--owed", "--timeout", "2", "--json"],
+    );
+    let waited_json: serde_json::Value = serde_json::from_slice(&waited.stdout).unwrap();
+    assert_eq!(waited_json["ok"], true);
+    assert!(waited_json["resolved"].is_null());
+}
+
+#[test]
 fn channel_leave_unsubscribes_an_agent() {
     let bus = temp_bus();
     run(&bus, &["init"]);
