@@ -423,18 +423,18 @@ blocks, each signed by the previous holder and each only able to *narrow* scope.
 Anyone can verify a token offline against the root issuer's public key.
 
 ```sh
-# Alice grants Bob the right to dispatch the `deploy` tool in staging for 1h:
+# Alice grants Bob the right to run the `deploy` tool in staging for 1h:
 raft grant new --issuer alice --to bob \
-  --action task.dispatch,task.result --tool deploy --env staging --ttl 1h \
+  --action tool.run --tool deploy --env staging --ttl 1h \
   --out cap.json
 
-# Bob narrows it and re-delegates to Carol (dispatch only):
+# Bob narrows it and re-delegates to Carol (same action, shorter scope):
 raft grant attenuate --holder bob --to carol --token-file cap.json \
-  --action task.dispatch --out cap-carol.json
+  --action tool.run --out cap-carol.json
 
 # Anyone verifies an action offline, pinning the trusted root:
 raft grant verify --token-file cap-carol.json --root alice \
-  --action task.dispatch --tool deploy --env staging   # -> authorized
+  --action tool.run --tool deploy --env staging   # -> authorized
 
 raft grant inspect --token-file cap-carol.json          # chain + effective scope
 ```
@@ -446,6 +446,29 @@ fail-closed — a token that does not constrain `action` authorizes nothing, and
 denied check returns the stable `not_authorized` code. This is the opposite of
 the ambient, all-or-nothing credentials most agent runtimes inject into tool
 code; here authority is explicit, scoped, time-boxed, and delegable.
+
+### Remote tasks
+
+The third piece is **delegation**. A task is an obligation-bearing message whose
+body is a Hermes-style tool call plus the capability that authorizes the worker
+to run it. Task status is the normal receipt lifecycle, so `awaiting`,
+`wait --owed`, and `wait --resolved` work without a separate scheduler.
+
+```sh
+raft task dispatch --from alice --to bob --conversation deploy-room \
+  --tool deploy --args '{"service":"api","env":"staging"}' --cap cap.json
+
+raft run bob --tool deploy=/usr/local/bin/deploy-tool --trust alice --once
+raft task status m-abc123
+raft task cancel m-abc123 --from alice --reason superseded
+```
+
+`raft run` is the v1 executor loop. It verifies the embedded capability against
+the trusted root, runs registered tools with JSON arguments on stdin, and returns
+the result as a reply before writing a terminal `done` or `rejected` receipt.
+The built-in sandbox uses a scrubbed environment, a per-task scratch directory,
+a wall-clock timeout, and an output cap; it is not yet an OS-enforced container
+or microVM boundary.
 
 ## Design Goals
 

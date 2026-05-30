@@ -13,8 +13,8 @@
 
 use crate::crypto::{self, Keypair};
 use crate::error::{RaftError, Result};
-use crate::storage::read_json;
 use crate::storage::atomic_write_json;
+use crate::storage::read_json;
 use crate::util::{iso_now, schema_v1};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -125,9 +125,6 @@ fn sign_passport(
 }
 
 /// Load an agent's keypair from disk, or `None` if it has no identity yet.
-// Consumed by capability issuance (L2) and message/receipt signing (L1) in the
-// next milestone.
-#[allow(dead_code)]
 pub(crate) fn load_keypair(root: &Path, id: &str) -> Result<Option<Keypair>> {
     let Some(key_file): Option<KeyFile> = read_json(&key_path(root, id))? else {
         return Ok(None);
@@ -147,8 +144,7 @@ mod tests {
     #[test]
     fn passport_signs_and_verifies() {
         let keypair = Keypair::generate();
-        let passport =
-            sign_passport(&keypair, "codex", &["plan".to_string()], iso_now()).unwrap();
+        let passport = sign_passport(&keypair, "codex", &["plan".to_string()], iso_now()).unwrap();
         assert!(passport.verify().is_ok());
         assert_eq!(passport.pubkey, keypair.public_hex());
     }

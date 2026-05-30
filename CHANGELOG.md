@@ -44,6 +44,16 @@ delegation over an untrusted network. See
     authorizes nothing, a constrained dimension the request omits is denied, and
     a broken delegation chain, forged caveat, expiry, or exceeded limit is
     rejected. New stable error code `not_authorized`.
+- Remote task delegation (L4): capability-gated Hermes-style tool calls over the
+  existing obligation engine.
+  - `raft task dispatch --from <agent> --to <worker> --conversation <id>|--channel
+    <id> --tool <name> --args <json> [--cap <token>]` posts a `kind=task`
+    message and marks the worker as the awaited responder.
+  - `raft run <worker> --tool name=/path/to/executable [--trust <agent|pubkey>]`
+    verifies `tool.run` authority, runs pending task asks, replies with the
+    result, and closes the task with a terminal `done` or `rejected` receipt.
+  - `raft task status <id>` reports worker receipt state plus any result reply;
+    `raft task cancel <id> --from <sender>` withdraws the task ask.
 
 ### Fixed
 

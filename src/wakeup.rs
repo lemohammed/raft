@@ -61,9 +61,7 @@ impl Waker {
             return;
         };
         match rx.recv_timeout(timeout) {
-            Ok(()) => {
-                while rx.try_recv().is_ok() {}
-            }
+            Ok(()) => while rx.try_recv().is_ok() {},
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => thread::sleep(timeout),
         }

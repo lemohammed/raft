@@ -95,8 +95,6 @@ impl Keypair {
     }
 
     /// Reconstruct from the 32-byte secret seed in hex.
-    // Used via `identity::load_keypair` by capability issuance / message signing.
-    #[allow(dead_code)]
     pub(crate) fn from_secret_hex(secret_hex: &str) -> Result<Self> {
         let bytes = hex_decode(secret_hex)?;
         let seed: [u8; 32] = bytes
@@ -194,7 +192,10 @@ mod tests {
     #[test]
     fn canonical_bytes_sort_keys_and_omit() {
         let value = serde_json::json!({ "b": 1, "a": 2, "sig": "zzz" });
-        assert_eq!(canonical_bytes(&value).unwrap(), br#"{"a":2,"b":1,"sig":"zzz"}"#);
+        assert_eq!(
+            canonical_bytes(&value).unwrap(),
+            br#"{"a":2,"b":1,"sig":"zzz"}"#
+        );
         assert_eq!(
             canonical_omitting(&value, &["sig"]).unwrap(),
             br#"{"a":2,"b":1}"#

@@ -38,8 +38,9 @@ pub(crate) fn validate_agent_state(value: &str) -> Result<String> {
 /// Recognized acknowledgement statuses, in lifecycle order. Statuses outside
 /// this set are rejected so callers cannot record an ack that silently fails to
 /// close an open ask. The terminal members are listed in [`TERMINAL_ACK_STATUSES`].
-pub(crate) const ACK_STATUSES: &[&str] =
-    &["received", "accepted", "working", "blocked", "done", "rejected"];
+pub(crate) const ACK_STATUSES: &[&str] = &[
+    "received", "accepted", "working", "blocked", "done", "rejected",
+];
 
 /// Acknowledgement statuses that close an open ask. Keep in sync with
 /// `ask_is_terminal`; both read from this single source of truth.
@@ -235,10 +236,18 @@ pub(crate) fn slugify_id_segment(value: &str) -> String {
 
 pub(crate) fn normalize_send_kind(kind: &str) -> Result<String> {
     match kind {
-        "message" | "event" | "receipt" => Ok(kind.to_string()),
+        "message" | "event" | "receipt" | "task" => Ok(kind.to_string()),
         "system" => bail!("kind \"system\" is reserved for raft internals"),
-        _ => bail!("unsupported kind {kind:?}; use message, event, or receipt"),
+        _ => bail!("unsupported kind {kind:?}; use message, event, receipt, or task"),
     }
+}
+
+/// Kinds that may carry an obligation (`--needs-response-from`/`--requires-ack`)
+/// and therefore open an ask: a plain `message`, or a `task` (a delegated unit of
+/// work whose receipt lifecycle *is* its status). `event`/`receipt`/`system`
+/// never open an ask.
+pub(crate) fn is_obligation_kind(kind: &str) -> bool {
+    matches!(kind, "message" | "task")
 }
 
 pub(crate) fn validate_subject_id(value: &str) -> Result<String> {

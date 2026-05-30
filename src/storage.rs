@@ -136,6 +136,15 @@ pub(crate) fn agent_path(root: &Path, agent_id: &str) -> PathBuf {
     root.join("agents").join(format!("{agent_id}.json"))
 }
 
+pub(crate) fn is_agent_record_file(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(OsStr::to_str) else {
+        return false;
+    };
+    path.extension() == Some(OsStr::new("json"))
+        && !name.ends_with(".key.json")
+        && !name.ends_with(".passport.json")
+}
+
 pub(crate) fn receipt_path_for(root: &Path, message: &Message, agent_id: &str) -> PathBuf {
     root.join("conversations")
         .join(&message.conversation_id)

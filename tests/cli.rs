@@ -19,10 +19,12 @@ fn temp_bus() -> PathBuf {
         .unwrap()
         .as_nanos();
     let counter = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let path = std::env::temp_dir().join(format!(
-        "raft-test-{}-{nanos}-{counter}",
-        std::process::id()
-    ));
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tmp")
+        .join(format!(
+            "raft-test-{}-{nanos}-{counter}",
+            std::process::id()
+        ));
     fs::create_dir_all(&path).unwrap();
     path.join("bus")
 }
@@ -97,10 +99,7 @@ fn send_json_returns_resolved_envelope() {
     let envelope: serde_json::Value = serde_json::from_slice(&sent.stdout).unwrap();
     assert_eq!(envelope["ok"], serde_json::json!(true));
     assert!(
-        envelope["message_id"]
-            .as_str()
-            .unwrap()
-            .starts_with("m-"),
+        envelope["message_id"].as_str().unwrap().starts_with("m-"),
         "message_id should be present and prefixed"
     );
     assert_eq!(envelope["conversation_id"], serde_json::json!("sync"));
@@ -197,7 +196,9 @@ fn mutating_commands_emit_ok_envelopes() {
     let state: serde_json::Value = serde_json::from_slice(
         &run(
             &bus,
-            &["state", "set", "codex", "working", "--note", "busy", "--json"],
+            &[
+                "state", "set", "codex", "working", "--note", "busy", "--json",
+            ],
         )
         .stdout,
     )
@@ -224,7 +225,14 @@ fn mutating_commands_emit_ok_envelopes() {
     let ack: serde_json::Value = serde_json::from_slice(
         &run(
             &bus,
-            &["ack", "homekeep-dev", &message_id, "--status", "done", "--json"],
+            &[
+                "ack",
+                "homekeep-dev",
+                &message_id,
+                "--status",
+                "done",
+                "--json",
+            ],
         )
         .stdout,
     )
@@ -341,46 +349,94 @@ fn error_codes_are_stable_for_common_failures() {
 
     // A missing message must surface not_found, not the generic error code —
     // ack/read/thread/receipts all route through find_message.
-    let missing = run_fail(&bus, &["ack", "bob", "m-nope", "--status", "done", "--json"]);
+    let missing = run_fail(
+        &bus,
+        &["ack", "bob", "m-nope", "--status", "done", "--json"],
+    );
     let envelope: serde_json::Value = serde_json::from_slice(&missing.stderr).unwrap();
     assert_eq!(envelope["error"]["code"], serde_json::json!("not_found"));
 
     // Re-creating an existing channel/conversation without --if-missing is a conflict.
-    run(&bus, &["channel", "create", "team", "--creator", "alice", "--json"]);
-    let dup_channel = run_fail(&bus, &["channel", "create", "team", "--creator", "alice", "--json"]);
-    let dup_channel_json: serde_json::Value =
-        serde_json::from_slice(&dup_channel.stderr).unwrap();
-    assert_eq!(dup_channel_json["error"]["code"], serde_json::json!("conflict"));
+    run(
+        &bus,
+        &["channel", "create", "team", "--creator", "alice", "--json"],
+    );
+    let dup_channel = run_fail(
+        &bus,
+        &["channel", "create", "team", "--creator", "alice", "--json"],
+    );
+    let dup_channel_json: serde_json::Value = serde_json::from_slice(&dup_channel.stderr).unwrap();
+    assert_eq!(
+        dup_channel_json["error"]["code"],
+        serde_json::json!("conflict")
+    );
 
     run(
         &bus,
         &[
-            "conversation", "create", "proj", "--participants", "alice,bob", "--starter", "alice",
+            "conversation",
+            "create",
+            "proj",
+            "--participants",
+            "alice,bob",
+            "--starter",
+            "alice",
         ],
     );
     let dup_conv = run_fail(
         &bus,
         &[
-            "conversation", "create", "proj", "--participants", "alice,bob", "--starter", "alice",
+            "conversation",
+            "create",
+            "proj",
+            "--participants",
+            "alice,bob",
+            "--starter",
+            "alice",
             "--json",
         ],
     );
     let dup_conv_json: serde_json::Value = serde_json::from_slice(&dup_conv.stderr).unwrap();
-    assert_eq!(dup_conv_json["error"]["code"], serde_json::json!("conflict"));
+    assert_eq!(
+        dup_conv_json["error"]["code"],
+        serde_json::json!("conflict")
+    );
 
     // Sending from an id outside the conversation's participants is not_participant.
     run(
         &bus,
         &[
-            "conversation", "create", "room", "--participants", "alice,bob", "--starter", "alice",
+            "conversation",
+            "create",
+            "room",
+            "--participants",
+            "alice,bob",
+            "--starter",
+            "alice",
         ],
     );
     let outsider = run_fail(
         &bus,
-        &["send", "--conversation", "room", "--from", "carol", "--to", "bob", "--subject", "x", "--body", "y", "--json"],
+        &[
+            "send",
+            "--conversation",
+            "room",
+            "--from",
+            "carol",
+            "--to",
+            "bob",
+            "--subject",
+            "x",
+            "--body",
+            "y",
+            "--json",
+        ],
     );
     let outsider_json: serde_json::Value = serde_json::from_slice(&outsider.stderr).unwrap();
-    assert_eq!(outsider_json["error"]["code"], serde_json::json!("not_participant"));
+    assert_eq!(
+        outsider_json["error"]["code"],
+        serde_json::json!("not_participant")
+    );
 
     // A participant who cannot see a message (it was not addressed to them) gets
     // not_participant from `thread`, matching read/ack/show visibility checks.
@@ -388,17 +444,38 @@ fn error_codes_are_stable_for_common_failures() {
     run(
         &bus,
         &[
-            "conversation", "create", "trio", "--participants", "alice,bob,dave", "--starter", "alice",
+            "conversation",
+            "create",
+            "trio",
+            "--participants",
+            "alice,bob,dave",
+            "--starter",
+            "alice",
         ],
     );
     let sent = run(
         &bus,
-        &["send", "--conversation", "trio", "--from", "alice", "--to", "bob", "--subject", "s", "--body", "hidden from dave"],
+        &[
+            "send",
+            "--conversation",
+            "trio",
+            "--from",
+            "alice",
+            "--to",
+            "bob",
+            "--subject",
+            "s",
+            "--body",
+            "hidden from dave",
+        ],
     );
     let mid = String::from_utf8_lossy(&sent.stdout).trim().to_string();
     let hidden = run_fail(&bus, &["thread", &mid, "--agent", "dave", "--json"]);
     let hidden_json: serde_json::Value = serde_json::from_slice(&hidden.stderr).unwrap();
-    assert_eq!(hidden_json["error"]["code"], serde_json::json!("not_participant"));
+    assert_eq!(
+        hidden_json["error"]["code"],
+        serde_json::json!("not_participant")
+    );
 }
 
 #[test]
@@ -468,15 +545,29 @@ fn status_message_count_ignores_orphan_tmp_files() {
     run(
         &bus,
         &[
-            "conversation", "create", "c", "--participants", "alice,bob",
-            "--starter", "alice",
+            "conversation",
+            "create",
+            "c",
+            "--participants",
+            "alice,bob",
+            "--starter",
+            "alice",
         ],
     );
     run(
         &bus,
         &[
-            "send", "--conversation", "c", "--from", "alice", "--to", "bob",
-            "--subject", "Q", "--body", "hi",
+            "send",
+            "--conversation",
+            "c",
+            "--from",
+            "alice",
+            "--to",
+            "bob",
+            "--subject",
+            "Q",
+            "--body",
+            "hi",
         ],
     );
 
@@ -496,7 +587,11 @@ fn status_message_count_ignores_orphan_tmp_files() {
 
     // An interrupted atomic write leaves a `.tmp` sibling in messages/. It must
     // not inflate the count, which must agree with every other count path.
-    fs::write(bus.join("conversations/c/messages/.orphan.1.abc.tmp"), b"{}").unwrap();
+    fs::write(
+        bus.join("conversations/c/messages/.orphan.1.abc.tmp"),
+        b"{}",
+    )
+    .unwrap();
 
     let after = count(&run(&bus, &["status", "--json"]));
     assert_eq!(
@@ -663,7 +758,10 @@ fn state_get_flags_a_stale_agents_state_as_not_live() {
     let bus = temp_bus();
     run(&bus, &["init"]);
     run(&bus, &["claim", "worker", "--workspace", "."]);
-    run(&bus, &["state", "set", "worker", "working", "--note", "on it"]);
+    run(
+        &bus,
+        &["state", "set", "worker", "working", "--note", "on it"],
+    );
 
     // A freshly-claimed, heartbeating agent reads as live.
     let fresh = run(&bus, &["state", "get", "worker", "--json"]);
@@ -675,8 +773,7 @@ fn state_get_flags_a_stale_agents_state_as_not_live() {
     // agent is gone, so `state get` must report it as not live (text marks it
     // `(stale)`) rather than presenting `working` as authoritative.
     let path = bus.join("agents").join("worker.json");
-    let mut agent: serde_json::Value =
-        serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    let mut agent: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
     agent["expires_at"] = serde_json::json!("2000-01-01T00:00:00Z");
     fs::write(&path, serde_json::to_vec(&agent).unwrap()).unwrap();
 
@@ -852,30 +949,54 @@ fn inbox_limit_keeps_the_globally_newest_message_across_rooms() {
     run(
         &bus,
         &[
-            "conversation", "create", "aaa-room", "--participants", "a,viewer",
-            "--starter", "a",
+            "conversation",
+            "create",
+            "aaa-room",
+            "--participants",
+            "a,viewer",
+            "--starter",
+            "a",
         ],
     );
     run(
         &bus,
         &[
-            "conversation", "create", "zzz-room", "--participants", "a,viewer",
-            "--starter", "a",
+            "conversation",
+            "create",
+            "zzz-room",
+            "--participants",
+            "a,viewer",
+            "--starter",
+            "a",
         ],
     );
     let old = run(
         &bus,
         &[
-            "send", "--conversation", "zzz-room", "--from", "a", "--to", "viewer",
-            "--body", "older from zzz",
+            "send",
+            "--conversation",
+            "zzz-room",
+            "--from",
+            "a",
+            "--to",
+            "viewer",
+            "--body",
+            "older from zzz",
         ],
     );
     let old_id = String::from_utf8_lossy(&old.stdout).trim().to_string();
     let new = run(
         &bus,
         &[
-            "send", "--conversation", "aaa-room", "--from", "a", "--to", "viewer",
-            "--body", "newer from aaa",
+            "send",
+            "--conversation",
+            "aaa-room",
+            "--from",
+            "a",
+            "--to",
+            "viewer",
+            "--body",
+            "newer from aaa",
         ],
     );
     let new_id = String::from_utf8_lossy(&new.stdout).trim().to_string();
@@ -1566,7 +1687,15 @@ fn thread_limit_keeps_the_newest_replies_not_the_oldest() {
     let root = run(
         &bus,
         &[
-            "send", "--conversation", "c", "--from", "a", "--to", "b", "--body", "root topic",
+            "send",
+            "--conversation",
+            "c",
+            "--from",
+            "a",
+            "--to",
+            "b",
+            "--body",
+            "root topic",
         ],
     );
     let root_id = String::from_utf8_lossy(&root.stdout).trim().to_string();
@@ -1614,7 +1743,9 @@ fn thread_limit_keeps_the_newest_replies_not_the_oldest() {
     // Without a binding limit nothing is omitted.
     let full = run(
         &bus,
-        &["thread", &root_id, "--agent", "b", "--limit", "100", "--json"],
+        &[
+            "thread", &root_id, "--agent", "b", "--limit", "100", "--json",
+        ],
     );
     let full_view: serde_json::Value = serde_json::from_slice(&full.stdout).unwrap();
     assert_eq!(full_view["truncated"], false);
@@ -1822,8 +1953,16 @@ fn conversation_open_if_missing_is_idempotent_for_a_derived_id() {
             &run(
                 &bus,
                 &[
-                    "conversation", "open", "--from", from, "--to", to,
-                    "--topic", "deploy", "--if-missing", "--json",
+                    "conversation",
+                    "open",
+                    "--from",
+                    from,
+                    "--to",
+                    to,
+                    "--topic",
+                    "deploy",
+                    "--if-missing",
+                    "--json",
                 ],
             )
             .stdout,
@@ -1853,8 +1992,16 @@ fn conversation_open_if_missing_is_idempotent_for_a_derived_id() {
         &run(
             &bus,
             &[
-                "conversation", "open", "--from", "alice", "--to", "bob",
-                "--topic", "incident", "--if-missing", "--json",
+                "conversation",
+                "open",
+                "--from",
+                "alice",
+                "--to",
+                "bob",
+                "--topic",
+                "incident",
+                "--if-missing",
+                "--json",
             ],
         )
         .stdout,
@@ -1873,8 +2020,13 @@ fn event_kind_cannot_open_an_ask() {
     run(
         &bus,
         &[
-            "conversation", "create", "c", "--participants", "worker,bridge",
-            "--starter", "bridge",
+            "conversation",
+            "create",
+            "c",
+            "--participants",
+            "worker,bridge",
+            "--starter",
+            "bridge",
         ],
     );
 
@@ -1884,8 +2036,19 @@ fn event_kind_cannot_open_an_ask() {
     let ack = run_fail(
         &bus,
         &[
-            "send", "--conversation", "c", "--from", "bridge", "--to", "worker",
-            "--kind", "event", "--body", "human says hi", "--requires-ack", "--json",
+            "send",
+            "--conversation",
+            "c",
+            "--from",
+            "bridge",
+            "--to",
+            "worker",
+            "--kind",
+            "event",
+            "--body",
+            "human says hi",
+            "--requires-ack",
+            "--json",
         ],
     );
     let ack_err: serde_json::Value = serde_json::from_slice(&ack.stderr).unwrap();
@@ -1899,9 +2062,20 @@ fn event_kind_cannot_open_an_ask() {
     let needs = run_fail(
         &bus,
         &[
-            "send", "--conversation", "c", "--from", "bridge", "--to", "worker",
-            "--kind", "event", "--body", "human says hi",
-            "--needs-response-from", "worker", "--json",
+            "send",
+            "--conversation",
+            "c",
+            "--from",
+            "bridge",
+            "--to",
+            "worker",
+            "--kind",
+            "event",
+            "--body",
+            "human says hi",
+            "--needs-response-from",
+            "worker",
+            "--json",
         ],
     );
     let needs_err: serde_json::Value = serde_json::from_slice(&needs.stderr).unwrap();
@@ -1916,8 +2090,18 @@ fn event_kind_cannot_open_an_ask() {
     run(
         &bus,
         &[
-            "send", "--conversation", "c", "--from", "bridge", "--to", "worker",
-            "--kind", "event", "--body", "human says hi", "--json",
+            "send",
+            "--conversation",
+            "c",
+            "--from",
+            "bridge",
+            "--to",
+            "worker",
+            "--kind",
+            "event",
+            "--body",
+            "human says hi",
+            "--json",
         ],
     );
     let owed = run(&bus, &["awaiting", "worker", "--json"]);
@@ -2061,7 +2245,12 @@ fn awaiting_tracks_open_asks_until_resolved() {
     let waiting_after = run(&bus, &["awaiting", "sender-x", "--json"]);
     let waiting_after_json: serde_json::Value =
         serde_json::from_slice(&waiting_after.stdout).unwrap();
-    assert!(waiting_after_json["owed_to_you"].as_array().unwrap().is_empty());
+    assert!(
+        waiting_after_json["owed_to_you"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]
@@ -2106,7 +2295,14 @@ fn ack_rejects_unknown_status_and_nonterminal_keeps_ask_open() {
     // An unrecognized status is rejected with a stable error code.
     let denied = run_fail(
         &bus,
-        &["ack", "ower-y", &message_id, "--status", "finished", "--json"],
+        &[
+            "ack",
+            "ower-y",
+            &message_id,
+            "--status",
+            "finished",
+            "--json",
+        ],
     );
     let envelope: serde_json::Value = serde_json::from_slice(&denied.stderr).unwrap();
     assert_eq!(envelope["ok"], serde_json::json!(false));
@@ -2427,15 +2623,30 @@ fn gc_archive_retains_an_unresolved_open_ask_until_it_is_discharged() {
     run(
         &bus,
         &[
-            "conversation", "create", "c", "--participants", "a,b", "--starter", "a",
-            "--retention-days", "1",
+            "conversation",
+            "create",
+            "c",
+            "--participants",
+            "a,b",
+            "--starter",
+            "a",
+            "--retention-days",
+            "1",
         ],
     );
     let sent = run(
         &bus,
         &[
-            "send", "--conversation", "c", "--from", "a", "--to", "b",
-            "--body", "deploy?", "--requires-ack",
+            "send",
+            "--conversation",
+            "c",
+            "--from",
+            "a",
+            "--to",
+            "b",
+            "--body",
+            "deploy?",
+            "--requires-ack",
         ],
     );
     let message_id = String::from_utf8_lossy(&sent.stdout).trim().to_string();
@@ -2472,7 +2683,10 @@ fn gc_archive_retains_an_unresolved_open_ask_until_it_is_discharged() {
     run(&bus, &["read", "b", &message_id]);
     run(&bus, &["ack", "b", &message_id, "--status", "done"]);
     run(&bus, &["gc", "--archive"]);
-    assert!(!message_path.exists(), "a resolved ask should archive normally");
+    assert!(
+        !message_path.exists(),
+        "a resolved ask should archive normally"
+    );
     assert!(bus.join(format!("archive/c/{message_id}.json")).exists());
 }
 
@@ -2661,7 +2875,10 @@ fn doctor_reports_stale_orphan_temp_files() {
 
     let out = run(&bus, &["doctor", "--json"]);
     let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(report["ok"], true, "orphan temp files are warnings, not errors");
+    assert_eq!(
+        report["ok"], true,
+        "orphan temp files are warnings, not errors"
+    );
     assert!(
         report["issues"]
             .as_array()
@@ -2680,14 +2897,31 @@ fn channel_list_reports_membership_and_unread() {
     run(&bus, &["claim", "bob", "--workspace", "."]);
     run(
         &bus,
-        &["channel", "create", "eng", "--creator", "alice", "--members", "bob"],
+        &[
+            "channel",
+            "create",
+            "eng",
+            "--creator",
+            "alice",
+            "--members",
+            "bob",
+        ],
     );
     run(&bus, &["channel", "create", "ops", "--creator", "alice"]);
     run(
         &bus,
         &[
-            "send", "--channel", "eng", "--from", "alice", "--to", "*", "--subject",
-            "hi", "--body", "hello team",
+            "send",
+            "--channel",
+            "eng",
+            "--from",
+            "alice",
+            "--to",
+            "*",
+            "--subject",
+            "hi",
+            "--body",
+            "hello team",
         ],
     );
 
@@ -2718,12 +2952,24 @@ fn roster_exposes_capabilities_and_filters_by_them() {
     run(&bus, &["init"]);
     run(
         &bus,
-        &["claim", "alice", "--workspace", ".", "--capabilities", "review,docs"],
+        &[
+            "claim",
+            "alice",
+            "--workspace",
+            ".",
+            "--capabilities",
+            "review,docs",
+        ],
     );
     run(
         &bus,
         &[
-            "claim", "bob", "--workspace", ".", "--capabilities", "implementation,tests",
+            "claim",
+            "bob",
+            "--workspace",
+            ".",
+            "--capabilities",
+            "implementation,tests",
         ],
     );
 
@@ -2753,22 +2999,38 @@ fn reply_inherits_conversation_thread_and_subject() {
     run(
         &bus,
         &[
-            "conversation", "create", "proj", "--participants", "alice,bob",
-            "--starter", "alice",
+            "conversation",
+            "create",
+            "proj",
+            "--participants",
+            "alice,bob",
+            "--starter",
+            "alice",
         ],
     );
     let parent = run(
         &bus,
         &[
-            "send", "--conversation", "proj", "--from", "alice", "--to", "bob",
-            "--subject", "task", "--body", "please do X",
+            "send",
+            "--conversation",
+            "proj",
+            "--from",
+            "alice",
+            "--to",
+            "bob",
+            "--subject",
+            "task",
+            "--body",
+            "please do X",
         ],
     );
     let parent_id = String::from_utf8(parent.stdout).unwrap().trim().to_string();
 
     let reply = run(
         &bus,
-        &["reply", &parent_id, "--from", "bob", "--body", "on it", "--json"],
+        &[
+            "reply", &parent_id, "--from", "bob", "--body", "on it", "--json",
+        ],
     );
     let envelope: serde_json::Value = serde_json::from_slice(&reply.stdout).unwrap();
     assert_eq!(envelope["ok"], true);
@@ -2786,7 +3048,9 @@ fn reply_inherits_conversation_thread_and_subject() {
     // A non-participant cannot reply.
     let denied = run_fail(
         &bus,
-        &["reply", &parent_id, "--from", "carol", "--body", "hi", "--json"],
+        &[
+            "reply", &parent_id, "--from", "carol", "--body", "hi", "--json",
+        ],
     );
     let err: serde_json::Value = serde_json::from_slice(&denied.stderr).unwrap();
     assert_eq!(err["error"]["code"], "not_participant");
@@ -2801,15 +3065,31 @@ fn a_non_terminal_ack_cannot_downgrade_a_closed_ask() {
     run(
         &bus,
         &[
-            "conversation", "create", "c", "--participants", "alice,bob",
-            "--starter", "alice",
+            "conversation",
+            "create",
+            "c",
+            "--participants",
+            "alice,bob",
+            "--starter",
+            "alice",
         ],
     );
     let sent = run(
         &bus,
         &[
-            "send", "--conversation", "c", "--from", "alice", "--to", "bob",
-            "--subject", "Q", "--body", "ship it", "--needs-response-from", "bob",
+            "send",
+            "--conversation",
+            "c",
+            "--from",
+            "alice",
+            "--to",
+            "bob",
+            "--subject",
+            "Q",
+            "--body",
+            "ship it",
+            "--needs-response-from",
+            "bob",
         ],
     );
     let mid = String::from_utf8_lossy(&sent.stdout).trim().to_string();
@@ -2820,7 +3100,10 @@ fn a_non_terminal_ack_cannot_downgrade_a_closed_ask() {
     };
 
     // bob closes the ask with a terminal ack.
-    run(&bus, &["ack", "bob", &mid, "--status", "done", "--note", "shipped"]);
+    run(
+        &bus,
+        &["ack", "bob", &mid, "--status", "done", "--note", "shipped"],
+    );
     assert_eq!(owed_count(&run(&bus, &["awaiting", "alice", "--json"])), 0);
 
     // A later non-terminal ack must NOT downgrade the stored `done`, which would
@@ -2828,7 +3111,10 @@ fn a_non_terminal_ack_cannot_downgrade_a_closed_ask() {
     let downgrade = run(&bus, &["ack", "bob", &mid, "--status", "working", "--json"]);
     let dj: serde_json::Value = serde_json::from_slice(&downgrade.stdout).unwrap();
     assert_eq!(dj["ok"], true);
-    assert_eq!(dj["status"], "done", "the stored terminal status must be preserved");
+    assert_eq!(
+        dj["status"], "done",
+        "the stored terminal status must be preserved"
+    );
     assert_eq!(dj["requested_status"], "working");
     assert_eq!(dj["downgrade_ignored"], true);
 
@@ -2849,16 +3135,32 @@ fn reply_with_ack_closes_the_open_ask() {
     run(
         &bus,
         &[
-            "conversation", "create", "proj", "--participants", "alice,bob",
-            "--starter", "alice",
+            "conversation",
+            "create",
+            "proj",
+            "--participants",
+            "alice,bob",
+            "--starter",
+            "alice",
         ],
     );
     let parent = run(
         &bus,
         &[
-            "send", "--conversation", "proj", "--from", "alice", "--to", "bob",
-            "--subject", "task", "--body", "do X", "--requires-ack",
-            "--needs-response-from", "bob",
+            "send",
+            "--conversation",
+            "proj",
+            "--from",
+            "alice",
+            "--to",
+            "bob",
+            "--subject",
+            "task",
+            "--body",
+            "do X",
+            "--requires-ack",
+            "--needs-response-from",
+            "bob",
         ],
     );
     let parent_id = String::from_utf8(parent.stdout).unwrap().trim().to_string();
@@ -2872,8 +3174,17 @@ fn reply_with_ack_closes_the_open_ask() {
     let reply = run(
         &bus,
         &[
-            "reply", &parent_id, "--from", "bob", "--body", "done it",
-            "--ack", "done", "--ack-note", "shipped", "--json",
+            "reply",
+            &parent_id,
+            "--from",
+            "bob",
+            "--body",
+            "done it",
+            "--ack",
+            "done",
+            "--ack-note",
+            "shipped",
+            "--json",
         ],
     );
     let reply_json: serde_json::Value = serde_json::from_slice(&reply.stdout).unwrap();
@@ -2896,12 +3207,17 @@ fn reply_with_ack_closes_the_open_ask() {
         .count();
     run_fail(
         &bus,
-        &["reply", &parent_id, "--from", "bob", "--body", "x", "--ack", "finished"],
+        &[
+            "reply", &parent_id, "--from", "bob", "--body", "x", "--ack", "finished",
+        ],
     );
     let after_count = std::fs::read_dir(bus.join("conversations/proj/messages"))
         .unwrap()
         .count();
-    assert_eq!(before_count, after_count, "bad ack status must not send a reply");
+    assert_eq!(
+        before_count, after_count,
+        "bad ack status must not send a reply"
+    );
 }
 
 #[test]
@@ -2934,16 +3250,31 @@ fn awaiting_closes_each_recipient_independently() {
     run(
         &bus,
         &[
-            "conversation", "create", "proj", "--participants", "alice,bob,carol",
-            "--starter", "alice",
+            "conversation",
+            "create",
+            "proj",
+            "--participants",
+            "alice,bob,carol",
+            "--starter",
+            "alice",
         ],
     );
     let sent = run(
         &bus,
         &[
-            "send", "--conversation", "proj", "--from", "alice",
-            "--to", "bob,carol", "--subject", "need both",
-            "--body", "please respond", "--needs-response-from", "bob,carol",
+            "send",
+            "--conversation",
+            "proj",
+            "--from",
+            "alice",
+            "--to",
+            "bob,carol",
+            "--subject",
+            "need both",
+            "--body",
+            "please respond",
+            "--needs-response-from",
+            "bob,carol",
         ],
     );
     let message_id = String::from_utf8_lossy(&sent.stdout).trim().to_string();
@@ -2979,12 +3310,10 @@ fn awaiting_closes_each_recipient_independently() {
     let bob_after_json: serde_json::Value = serde_json::from_slice(&bob_after.stdout).unwrap();
     assert!(bob_after_json["you_owe"].as_array().unwrap().is_empty());
     let carol_after = run(&bus, &["awaiting", "carol", "--json"]);
-    let carol_after_json: serde_json::Value =
-        serde_json::from_slice(&carol_after.stdout).unwrap();
+    let carol_after_json: serde_json::Value = serde_json::from_slice(&carol_after.stdout).unwrap();
     assert_eq!(carol_after_json["you_owe"].as_array().unwrap().len(), 1);
     let alice_after = run(&bus, &["awaiting", "alice", "--json"]);
-    let alice_after_json: serde_json::Value =
-        serde_json::from_slice(&alice_after.stdout).unwrap();
+    let alice_after_json: serde_json::Value = serde_json::from_slice(&alice_after.stdout).unwrap();
     let owed_after = alice_after_json["owed_to_you"].as_array().unwrap();
     assert_eq!(owed_after.len(), 1);
     assert_eq!(owed_after[0]["awaited"], "carol");
@@ -3000,8 +3329,13 @@ fn conversation_add_lets_a_new_participant_join_an_existing_chat() {
     run(
         &bus,
         &[
-            "conversation", "create", "proj", "--participants", "alice,bob",
-            "--starter", "alice",
+            "conversation",
+            "create",
+            "proj",
+            "--participants",
+            "alice,bob",
+            "--starter",
+            "alice",
         ],
     );
 
@@ -3009,15 +3343,28 @@ fn conversation_add_lets_a_new_participant_join_an_existing_chat() {
     let blocked = run_fail(
         &bus,
         &[
-            "send", "--conversation", "proj", "--from", "carol", "--to", "alice",
-            "--subject", "hi", "--body", "let me in", "--json",
+            "send",
+            "--conversation",
+            "proj",
+            "--from",
+            "carol",
+            "--to",
+            "alice",
+            "--subject",
+            "hi",
+            "--body",
+            "let me in",
+            "--json",
         ],
     );
     let blocked_json: serde_json::Value = serde_json::from_slice(&blocked.stderr).unwrap();
     assert_eq!(blocked_json["error"]["code"], "not_participant");
 
     // Adding her reports the new participant set.
-    let added = run(&bus, &["conversation", "add", "proj", "--agent", "carol", "--json"]);
+    let added = run(
+        &bus,
+        &["conversation", "add", "proj", "--agent", "carol", "--json"],
+    );
     let added_json: serde_json::Value = serde_json::from_slice(&added.stdout).unwrap();
     assert_eq!(added_json["ok"], true);
     assert_eq!(added_json["added"], true);
@@ -3030,7 +3377,10 @@ fn conversation_add_lets_a_new_participant_join_an_existing_chat() {
     assert!(participants.contains(&"carol"));
 
     // Re-adding is idempotent: added=false, no duplicate participant.
-    let again = run(&bus, &["conversation", "add", "proj", "--agent", "carol", "--json"]);
+    let again = run(
+        &bus,
+        &["conversation", "add", "proj", "--agent", "carol", "--json"],
+    );
     let again_json: serde_json::Value = serde_json::from_slice(&again.stdout).unwrap();
     assert_eq!(again_json["added"], false);
     assert_eq!(again_json["participants"].as_array().unwrap().len(), 3);
@@ -3039,14 +3389,26 @@ fn conversation_add_lets_a_new_participant_join_an_existing_chat() {
     run(
         &bus,
         &[
-            "send", "--conversation", "proj", "--from", "carol", "--to", "alice",
-            "--subject", "hi", "--body", "thanks",
+            "send",
+            "--conversation",
+            "proj",
+            "--from",
+            "carol",
+            "--to",
+            "alice",
+            "--subject",
+            "hi",
+            "--body",
+            "thanks",
         ],
     );
 
     // Adding to a channel is rejected; the agent must use `channel join`.
     run(&bus, &["channel", "create", "room", "--creator", "alice"]);
-    let chan = run_fail(&bus, &["conversation", "add", "room", "--agent", "bob", "--json"]);
+    let chan = run_fail(
+        &bus,
+        &["conversation", "add", "room", "--agent", "bob", "--json"],
+    );
     let chan_json: serde_json::Value = serde_json::from_slice(&chan.stderr).unwrap();
     assert!(
         chan_json["error"]["message"]
@@ -3056,7 +3418,10 @@ fn conversation_add_lets_a_new_participant_join_an_existing_chat() {
     );
 
     // Adding to a missing conversation reports not_found.
-    let missing = run_fail(&bus, &["conversation", "add", "nope", "--agent", "bob", "--json"]);
+    let missing = run_fail(
+        &bus,
+        &["conversation", "add", "nope", "--agent", "bob", "--json"],
+    );
     let missing_json: serde_json::Value = serde_json::from_slice(&missing.stderr).unwrap();
     assert_eq!(missing_json["error"]["code"], "not_found");
 }
@@ -3071,8 +3436,13 @@ fn not_participant_error_lists_the_valid_participants() {
     run(
         &bus,
         &[
-            "conversation", "create", "proj", "--participants", "alice,bob",
-            "--starter", "alice",
+            "conversation",
+            "create",
+            "proj",
+            "--participants",
+            "alice,bob",
+            "--starter",
+            "alice",
         ],
     );
 
@@ -3081,8 +3451,18 @@ fn not_participant_error_lists_the_valid_participants() {
     let from_outsider = run_fail(
         &bus,
         &[
-            "send", "--conversation", "proj", "--from", "carol", "--to", "alice",
-            "--subject", "hi", "--body", "x", "--json",
+            "send",
+            "--conversation",
+            "proj",
+            "--from",
+            "carol",
+            "--to",
+            "alice",
+            "--subject",
+            "hi",
+            "--body",
+            "x",
+            "--json",
         ],
     );
     let from_json: serde_json::Value = serde_json::from_slice(&from_outsider.stderr).unwrap();
@@ -3100,8 +3480,18 @@ fn not_participant_error_lists_the_valid_participants() {
     let to_outsider = run_fail(
         &bus,
         &[
-            "send", "--conversation", "proj", "--from", "alice", "--to", "carol",
-            "--subject", "hi", "--body", "x", "--json",
+            "send",
+            "--conversation",
+            "proj",
+            "--from",
+            "alice",
+            "--to",
+            "carol",
+            "--subject",
+            "hi",
+            "--body",
+            "x",
+            "--json",
         ],
     );
     let to_json: serde_json::Value = serde_json::from_slice(&to_outsider.stderr).unwrap();
@@ -3115,8 +3505,18 @@ fn not_participant_error_lists_the_valid_participants() {
     let not_found = run_fail(
         &bus,
         &[
-            "send", "--conversation", "nope", "--from", "alice", "--to", "bob",
-            "--subject", "hi", "--body", "x", "--json",
+            "send",
+            "--conversation",
+            "nope",
+            "--from",
+            "alice",
+            "--to",
+            "bob",
+            "--subject",
+            "hi",
+            "--body",
+            "x",
+            "--json",
         ],
     );
     let nf_json: serde_json::Value = serde_json::from_slice(&not_found.stderr).unwrap();
@@ -3133,18 +3533,36 @@ fn not_found_suggests_nearest_conversation_id() {
     run(
         &bus,
         &[
-            "conversation", "create", "homekeep-sync", "--participants", "alice,bob",
-            "--starter", "alice",
+            "conversation",
+            "create",
+            "homekeep-sync",
+            "--participants",
+            "alice,bob",
+            "--starter",
+            "alice",
         ],
     );
-    run(&bus, &["channel", "create", "homekeep-main", "--creator", "alice"]);
+    run(
+        &bus,
+        &["channel", "create", "homekeep-main", "--creator", "alice"],
+    );
 
     // A near-miss conversation id on send yields a "did you mean" suggestion.
     let typo = run_fail(
         &bus,
         &[
-            "send", "--conversation", "homekep-sync", "--from", "alice", "--to", "bob",
-            "--subject", "x", "--body", "y", "--json",
+            "send",
+            "--conversation",
+            "homekep-sync",
+            "--from",
+            "alice",
+            "--to",
+            "bob",
+            "--subject",
+            "x",
+            "--body",
+            "y",
+            "--json",
         ],
     );
     let typo_json: serde_json::Value = serde_json::from_slice(&typo.stderr).unwrap();
@@ -3161,7 +3579,17 @@ fn not_found_suggests_nearest_conversation_id() {
     assert_eq!(suggestions[0], "homekeep-sync");
 
     // channel join enriches the same way, naming the channel.
-    let chan = run_fail(&bus, &["channel", "join", "homekeep-man", "--agent", "bob", "--json"]);
+    let chan = run_fail(
+        &bus,
+        &[
+            "channel",
+            "join",
+            "homekeep-man",
+            "--agent",
+            "bob",
+            "--json",
+        ],
+    );
     let chan_json: serde_json::Value = serde_json::from_slice(&chan.stderr).unwrap();
     let chan_suggestions: Vec<&str> = chan_json["error"]["suggestions"]
         .as_array()
@@ -3175,8 +3603,18 @@ fn not_found_suggests_nearest_conversation_id() {
     let far = run_fail(
         &bus,
         &[
-            "send", "--conversation", "zzzzzzzzzz", "--from", "alice", "--to", "bob",
-            "--subject", "x", "--body", "y", "--json",
+            "send",
+            "--conversation",
+            "zzzzzzzzzz",
+            "--from",
+            "alice",
+            "--to",
+            "bob",
+            "--subject",
+            "x",
+            "--body",
+            "y",
+            "--json",
         ],
     );
     let far_json: serde_json::Value = serde_json::from_slice(&far.stderr).unwrap();
@@ -3194,13 +3632,28 @@ fn conversation_remove_drops_a_participant_and_blocks_their_sends() {
     run(
         &bus,
         &[
-            "conversation", "create", "proj", "--participants", "alice,bob,carol",
-            "--starter", "alice",
+            "conversation",
+            "create",
+            "proj",
+            "--participants",
+            "alice,bob,carol",
+            "--starter",
+            "alice",
         ],
     );
 
     // Removing carol reports the shrunken participant set.
-    let removed = run(&bus, &["conversation", "remove", "proj", "--agent", "carol", "--json"]);
+    let removed = run(
+        &bus,
+        &[
+            "conversation",
+            "remove",
+            "proj",
+            "--agent",
+            "carol",
+            "--json",
+        ],
+    );
     let removed_json: serde_json::Value = serde_json::from_slice(&removed.stdout).unwrap();
     assert_eq!(removed_json["ok"], true);
     assert_eq!(removed_json["removed"], true);
@@ -3216,21 +3669,54 @@ fn conversation_remove_drops_a_participant_and_blocks_their_sends() {
     let blocked = run_fail(
         &bus,
         &[
-            "send", "--conversation", "proj", "--from", "carol", "--to", "alice",
-            "--subject", "x", "--body", "y", "--json",
+            "send",
+            "--conversation",
+            "proj",
+            "--from",
+            "carol",
+            "--to",
+            "alice",
+            "--subject",
+            "x",
+            "--body",
+            "y",
+            "--json",
         ],
     );
     let blocked_json: serde_json::Value = serde_json::from_slice(&blocked.stderr).unwrap();
     assert_eq!(blocked_json["error"]["code"], "not_participant");
 
     // Re-removing is idempotent.
-    let again = run(&bus, &["conversation", "remove", "proj", "--agent", "carol", "--json"]);
+    let again = run(
+        &bus,
+        &[
+            "conversation",
+            "remove",
+            "proj",
+            "--agent",
+            "carol",
+            "--json",
+        ],
+    );
     let again_json: serde_json::Value = serde_json::from_slice(&again.stdout).unwrap();
     assert_eq!(again_json["removed"], false);
 
     // Removing the last remaining participant is refused.
-    run(&bus, &["conversation", "remove", "proj", "--agent", "bob", "--json"]);
-    let last = run_fail(&bus, &["conversation", "remove", "proj", "--agent", "alice", "--json"]);
+    run(
+        &bus,
+        &["conversation", "remove", "proj", "--agent", "bob", "--json"],
+    );
+    let last = run_fail(
+        &bus,
+        &[
+            "conversation",
+            "remove",
+            "proj",
+            "--agent",
+            "alice",
+            "--json",
+        ],
+    );
     let last_json: serde_json::Value = serde_json::from_slice(&last.stderr).unwrap();
     assert!(
         last_json["error"]["message"]
@@ -3250,17 +3736,32 @@ fn removing_an_awaited_participant_releases_the_open_ask() {
     run(
         &bus,
         &[
-            "conversation", "create", "proj", "--participants", "alice,bob,carol",
-            "--starter", "alice",
+            "conversation",
+            "create",
+            "proj",
+            "--participants",
+            "alice,bob,carol",
+            "--starter",
+            "alice",
         ],
     );
     // Alice asks both bob and carol for a response.
     run(
         &bus,
         &[
-            "send", "--conversation", "proj", "--from", "alice", "--to", "bob,carol",
-            "--subject", "Q", "--body", "please respond",
-            "--needs-response-from", "bob,carol",
+            "send",
+            "--conversation",
+            "proj",
+            "--from",
+            "alice",
+            "--to",
+            "bob,carol",
+            "--subject",
+            "Q",
+            "--body",
+            "please respond",
+            "--needs-response-from",
+            "bob,carol",
         ],
     );
 
@@ -3281,13 +3782,26 @@ fn removing_an_awaited_participant_releases_the_open_ask() {
     assert_eq!(before_awaited, vec!["bob".to_string(), "carol".to_string()]);
 
     // Removing carol releases only carol's obligation; bob's stays open.
-    run(&bus, &["conversation", "remove", "proj", "--agent", "carol", "--json"]);
+    run(
+        &bus,
+        &[
+            "conversation",
+            "remove",
+            "proj",
+            "--agent",
+            "carol",
+            "--json",
+        ],
+    );
     let after = run(&bus, &["awaiting", "alice", "--json"]);
     assert_eq!(owed(&after), vec!["bob".to_string()]);
 
     // Removing bob too leaves no open ask, so `wait --owed` resolves instead of
     // blocking forever on a reply that can never come.
-    run(&bus, &["conversation", "remove", "proj", "--agent", "bob", "--json"]);
+    run(
+        &bus,
+        &["conversation", "remove", "proj", "--agent", "bob", "--json"],
+    );
     let drained = run(&bus, &["awaiting", "alice", "--json"]);
     assert!(owed(&drained).is_empty());
     let waited = run(
@@ -3307,13 +3821,32 @@ fn rejoining_a_channel_preserves_an_open_ask() {
     run(&bus, &["claim", "bob", "--workspace", "."]);
     run(
         &bus,
-        &["channel", "create", "room", "--creator", "alice", "--members", "bob"],
+        &[
+            "channel",
+            "create",
+            "room",
+            "--creator",
+            "alice",
+            "--members",
+            "bob",
+        ],
     );
     run(
         &bus,
         &[
-            "send", "--channel", "room", "--from", "alice", "--to", "bob",
-            "--subject", "Q", "--body", "please respond", "--needs-response-from", "bob",
+            "send",
+            "--channel",
+            "room",
+            "--from",
+            "alice",
+            "--to",
+            "bob",
+            "--subject",
+            "Q",
+            "--body",
+            "please respond",
+            "--needs-response-from",
+            "bob",
         ],
     );
 
@@ -3327,12 +3860,21 @@ fn rejoining_a_channel_preserves_an_open_ask() {
             .collect()
     };
 
-    assert_eq!(owed(&run(&bus, &["awaiting", "alice", "--json"])), vec!["bob".to_string()]);
+    assert_eq!(
+        owed(&run(&bus, &["awaiting", "alice", "--json"])),
+        vec!["bob".to_string()]
+    );
 
     // Bob reconnects: leave then rejoin must NOT clobber the join baseline and
     // silently discharge the still-unanswered ask.
-    run(&bus, &["channel", "leave", "room", "--agent", "bob", "--json"]);
-    run(&bus, &["channel", "join", "room", "--agent", "bob", "--json"]);
+    run(
+        &bus,
+        &["channel", "leave", "room", "--agent", "bob", "--json"],
+    );
+    run(
+        &bus,
+        &["channel", "join", "room", "--agent", "bob", "--json"],
+    );
 
     assert_eq!(
         owed(&run(&bus, &["awaiting", "alice", "--json"])),
@@ -3356,10 +3898,21 @@ fn channel_leave_unsubscribes_an_agent() {
     run(&bus, &["claim", "bob", "--workspace", "."]);
     run(
         &bus,
-        &["channel", "create", "room", "--creator", "alice", "--members", "bob"],
+        &[
+            "channel",
+            "create",
+            "room",
+            "--creator",
+            "alice",
+            "--members",
+            "bob",
+        ],
     );
 
-    let left = run(&bus, &["channel", "leave", "room", "--agent", "bob", "--json"]);
+    let left = run(
+        &bus,
+        &["channel", "leave", "room", "--agent", "bob", "--json"],
+    );
     let left_json: serde_json::Value = serde_json::from_slice(&left.stdout).unwrap();
     assert_eq!(left_json["left"], true);
     let members: Vec<&str> = left_json["members"]
@@ -3385,11 +3938,19 @@ fn channel_leave_unsubscribes_an_agent() {
     run(
         &bus,
         &[
-            "conversation", "create", "side", "--participants", "alice,bob",
-            "--starter", "alice",
+            "conversation",
+            "create",
+            "side",
+            "--participants",
+            "alice,bob",
+            "--starter",
+            "alice",
         ],
     );
-    let wrong = run_fail(&bus, &["channel", "leave", "side", "--agent", "bob", "--json"]);
+    let wrong = run_fail(
+        &bus,
+        &["channel", "leave", "side", "--agent", "bob", "--json"],
+    );
     let wrong_json: serde_json::Value = serde_json::from_slice(&wrong.stderr).unwrap();
     assert!(
         wrong_json["error"]["message"]
@@ -3408,15 +3969,31 @@ fn inbox_json_carries_viewer_relative_action_signals() {
     run(
         &bus,
         &[
-            "conversation", "create", "sync", "--participants", "alice,bob",
-            "--starter", "alice",
+            "conversation",
+            "create",
+            "sync",
+            "--participants",
+            "alice,bob",
+            "--starter",
+            "alice",
         ],
     );
     let sent = run(
         &bus,
         &[
-            "send", "--conversation", "sync", "--from", "alice", "--to", "bob",
-            "--subject", "Q", "--body", "please ack", "--requires-ack", "--json",
+            "send",
+            "--conversation",
+            "sync",
+            "--from",
+            "alice",
+            "--to",
+            "bob",
+            "--subject",
+            "Q",
+            "--body",
+            "please ack",
+            "--requires-ack",
+            "--json",
         ],
     );
     let mid = serde_json::from_slice::<serde_json::Value>(&sent.stdout).unwrap()["message_id"]
@@ -3443,7 +4020,8 @@ fn inbox_json_carries_viewer_relative_action_signals() {
     // A non-terminal ack leaves the ask open: read, but still awaiting_me.
     run(&bus, &["ack", "bob", &mid, "--status", "working"]);
     let inbox = run(&bus, &["inbox", "bob", "--json"]);
-    let msg = serde_json::from_slice::<serde_json::Value>(&inbox.stdout).unwrap()
+    let msg = serde_json::from_slice::<serde_json::Value>(&inbox.stdout)
+        .unwrap()
         .as_array()
         .unwrap()[0]
         .clone();
@@ -3454,7 +4032,8 @@ fn inbox_json_carries_viewer_relative_action_signals() {
     // A terminal ack closes the ask: awaiting_me clears.
     run(&bus, &["ack", "bob", &mid, "--status", "done"]);
     let inbox = run(&bus, &["inbox", "bob", "--json"]);
-    let msg = serde_json::from_slice::<serde_json::Value>(&inbox.stdout).unwrap()
+    let msg = serde_json::from_slice::<serde_json::Value>(&inbox.stdout)
+        .unwrap()
         .as_array()
         .unwrap()[0]
         .clone();
@@ -3468,7 +4047,8 @@ fn inbox_json_carries_viewer_relative_action_signals() {
 
     // The sender never awaits their own message and has no status on it.
     let inbox = run(&bus, &["inbox", "alice", "--json"]);
-    let msg = serde_json::from_slice::<serde_json::Value>(&inbox.stdout).unwrap()
+    let msg = serde_json::from_slice::<serde_json::Value>(&inbox.stdout)
+        .unwrap()
         .as_array()
         .unwrap()[0]
         .clone();
@@ -3485,15 +4065,31 @@ fn wait_owed_blocks_until_an_owed_ask_closes() {
     run(
         &bus,
         &[
-            "conversation", "create", "c", "--participants", "alice,bob",
-            "--starter", "alice",
+            "conversation",
+            "create",
+            "c",
+            "--participants",
+            "alice,bob",
+            "--starter",
+            "alice",
         ],
     );
     let sent = run(
         &bus,
         &[
-            "send", "--conversation", "c", "--from", "alice", "--to", "bob",
-            "--subject", "Q", "--body", "ack pls", "--requires-ack", "--json",
+            "send",
+            "--conversation",
+            "c",
+            "--from",
+            "alice",
+            "--to",
+            "bob",
+            "--subject",
+            "Q",
+            "--body",
+            "ack pls",
+            "--requires-ack",
+            "--json",
         ],
     );
     let mid = serde_json::from_slice::<serde_json::Value>(&sent.stdout).unwrap()["message_id"]
@@ -3508,11 +4104,22 @@ fn wait_owed_blocks_until_an_owed_ask_closes() {
         thread::sleep(Duration::from_millis(300));
         run(
             &bus_thread,
-            &["ack", "bob", &mid_thread, "--status", "done", "--note", "ok"],
+            &[
+                "ack",
+                "bob",
+                &mid_thread,
+                "--status",
+                "done",
+                "--note",
+                "ok",
+            ],
         );
     });
 
-    let owed = run(&bus, &["wait", "alice", "--owed", "--timeout", "10", "--json"]);
+    let owed = run(
+        &bus,
+        &["wait", "alice", "--owed", "--timeout", "10", "--json"],
+    );
     acker.join().unwrap();
     let owed_json: serde_json::Value = serde_json::from_slice(&owed.stdout).unwrap();
     assert_eq!(owed_json["ok"], true);
@@ -3527,7 +4134,10 @@ fn wait_owed_blocks_until_an_owed_ask_closes() {
     assert_eq!(resolved_json["resolved"]["status"], "done");
 
     // With nothing else open, --owed returns null without blocking.
-    let none = run(&bus, &["wait", "alice", "--owed", "--timeout", "2", "--json"]);
+    let none = run(
+        &bus,
+        &["wait", "alice", "--owed", "--timeout", "2", "--json"],
+    );
     let none_json: serde_json::Value = serde_json::from_slice(&none.stdout).unwrap();
     assert_eq!(none_json["resolved"], serde_json::Value::Null);
 }
@@ -3542,15 +4152,31 @@ fn wait_resolved_blocks_until_every_recipient_answers() {
     run(
         &bus,
         &[
-            "conversation", "create", "c", "--participants", "alice,bob,carol",
-            "--starter", "alice",
+            "conversation",
+            "create",
+            "c",
+            "--participants",
+            "alice,bob,carol",
+            "--starter",
+            "alice",
         ],
     );
     let sent = run(
         &bus,
         &[
-            "send", "--conversation", "c", "--from", "alice", "--to", "bob,carol",
-            "--subject", "Q", "--body", "both please", "--needs-response-from", "bob,carol",
+            "send",
+            "--conversation",
+            "c",
+            "--from",
+            "alice",
+            "--to",
+            "bob,carol",
+            "--subject",
+            "Q",
+            "--body",
+            "both please",
+            "--needs-response-from",
+            "bob,carol",
             "--json",
         ],
     );
@@ -3561,8 +4187,22 @@ fn wait_resolved_blocks_until_every_recipient_answers() {
 
     // Only bob has answered. `--resolved <id>` must NOT report the ask done
     // while carol still owes a reply; it blocks and then times out.
-    run(&bus, &["ack", "bob", &mid, "--status", "done", "--note", "bob ok"]);
-    let partial = run_fail(&bus, &["wait", "alice", "--resolved", &mid, "--timeout", "1", "--json"]);
+    run(
+        &bus,
+        &["ack", "bob", &mid, "--status", "done", "--note", "bob ok"],
+    );
+    let partial = run_fail(
+        &bus,
+        &[
+            "wait",
+            "alice",
+            "--resolved",
+            &mid,
+            "--timeout",
+            "1",
+            "--json",
+        ],
+    );
     let partial_json: serde_json::Value = serde_json::from_slice(&partial.stderr).unwrap();
     assert_eq!(
         partial_json["error"]["code"], "timeout",
@@ -3570,8 +4210,24 @@ fn wait_resolved_blocks_until_every_recipient_answers() {
     );
 
     // Once carol also answers, the ask resolves.
-    run(&bus, &["ack", "carol", &mid, "--status", "done", "--note", "carol ok"]);
-    let done = run(&bus, &["wait", "alice", "--resolved", &mid, "--timeout", "2", "--json"]);
+    run(
+        &bus,
+        &[
+            "ack", "carol", &mid, "--status", "done", "--note", "carol ok",
+        ],
+    );
+    let done = run(
+        &bus,
+        &[
+            "wait",
+            "alice",
+            "--resolved",
+            &mid,
+            "--timeout",
+            "2",
+            "--json",
+        ],
+    );
     let done_json: serde_json::Value = serde_json::from_slice(&done.stdout).unwrap();
     assert_eq!(done_json["ok"], true);
     assert_eq!(done_json["resolved"]["status"], "done");
@@ -3587,15 +4243,31 @@ fn wait_resolved_on_a_closed_ask_surfaces_a_rejection() {
     run(
         &bus,
         &[
-            "conversation", "create", "c", "--participants", "alice,bob,carol",
-            "--starter", "alice",
+            "conversation",
+            "create",
+            "c",
+            "--participants",
+            "alice,bob,carol",
+            "--starter",
+            "alice",
         ],
     );
     let sent = run(
         &bus,
         &[
-            "send", "--conversation", "c", "--from", "alice", "--to", "bob,carol",
-            "--subject", "Q", "--body", "both please", "--needs-response-from", "bob,carol",
+            "send",
+            "--conversation",
+            "c",
+            "--from",
+            "alice",
+            "--to",
+            "bob,carol",
+            "--subject",
+            "Q",
+            "--body",
+            "both please",
+            "--needs-response-from",
+            "bob,carol",
             "--json",
         ],
     );
@@ -3607,10 +4279,29 @@ fn wait_resolved_on_a_closed_ask_surfaces_a_rejection() {
     // Both recipients answer terminally BEFORE the asker calls wait, so the ask
     // is already closed. bob accepts but carol rejects — the aggregate must be
     // `rejected`, not the alphabetically-first `done`. (bob sorts before carol.)
-    run(&bus, &["ack", "bob", &mid, "--status", "done", "--note", "bob ok"]);
-    run(&bus, &["ack", "carol", &mid, "--status", "rejected", "--note", "carol no"]);
+    run(
+        &bus,
+        &["ack", "bob", &mid, "--status", "done", "--note", "bob ok"],
+    );
+    run(
+        &bus,
+        &[
+            "ack", "carol", &mid, "--status", "rejected", "--note", "carol no",
+        ],
+    );
 
-    let resolved = run(&bus, &["wait", "alice", "--resolved", &mid, "--timeout", "2", "--json"]);
+    let resolved = run(
+        &bus,
+        &[
+            "wait",
+            "alice",
+            "--resolved",
+            &mid,
+            "--timeout",
+            "2",
+            "--json",
+        ],
+    );
     let resolved_json: serde_json::Value = serde_json::from_slice(&resolved.stdout).unwrap();
     assert_eq!(resolved_json["ok"], true);
     assert_eq!(
@@ -3628,15 +4319,31 @@ fn wait_resolution_rejects_unknown_and_unowned_asks() {
     run(
         &bus,
         &[
-            "conversation", "create", "c", "--participants", "alice,bob",
-            "--starter", "alice",
+            "conversation",
+            "create",
+            "c",
+            "--participants",
+            "alice,bob",
+            "--starter",
+            "alice",
         ],
     );
     let sent = run(
         &bus,
         &[
-            "send", "--conversation", "c", "--from", "alice", "--to", "bob",
-            "--subject", "Q", "--body", "ack pls", "--requires-ack", "--json",
+            "send",
+            "--conversation",
+            "c",
+            "--from",
+            "alice",
+            "--to",
+            "bob",
+            "--subject",
+            "Q",
+            "--body",
+            "ack pls",
+            "--requires-ack",
+            "--json",
         ],
     );
     let mid = serde_json::from_slice::<serde_json::Value>(&sent.stdout).unwrap()["message_id"]
@@ -3645,7 +4352,10 @@ fn wait_resolution_rejects_unknown_and_unowned_asks() {
         .to_string();
 
     // An unknown message id is not found.
-    let unknown = run_fail(&bus, &["wait", "alice", "--resolved", "m-nope-000000", "--json"]);
+    let unknown = run_fail(
+        &bus,
+        &["wait", "alice", "--resolved", "m-nope-000000", "--json"],
+    );
     let unknown_json: serde_json::Value = serde_json::from_slice(&unknown.stderr).unwrap();
     assert_eq!(unknown_json["error"]["code"], "not_found");
 
@@ -3675,15 +4385,31 @@ fn ack_reports_whether_it_closed_an_open_ask() {
     run(
         &bus,
         &[
-            "conversation", "create", "c", "--participants", "alice,bob",
-            "--starter", "alice",
+            "conversation",
+            "create",
+            "c",
+            "--participants",
+            "alice,bob",
+            "--starter",
+            "alice",
         ],
     );
     let ask = run(
         &bus,
         &[
-            "send", "--conversation", "c", "--from", "alice", "--to", "bob",
-            "--subject", "Q", "--body", "ack pls", "--requires-ack", "--json",
+            "send",
+            "--conversation",
+            "c",
+            "--from",
+            "alice",
+            "--to",
+            "bob",
+            "--subject",
+            "Q",
+            "--body",
+            "ack pls",
+            "--requires-ack",
+            "--json",
         ],
     );
     let ask_id = serde_json::from_slice::<serde_json::Value>(&ask.stdout).unwrap()["message_id"]
@@ -3693,15 +4419,25 @@ fn ack_reports_whether_it_closed_an_open_ask() {
     let plain = run(
         &bus,
         &[
-            "send", "--conversation", "c", "--from", "alice", "--to", "bob",
-            "--subject", "FYI", "--body", "info", "--json",
+            "send",
+            "--conversation",
+            "c",
+            "--from",
+            "alice",
+            "--to",
+            "bob",
+            "--subject",
+            "FYI",
+            "--body",
+            "info",
+            "--json",
         ],
     );
-    let plain_id = serde_json::from_slice::<serde_json::Value>(&plain.stdout).unwrap()
-        ["message_id"]
-        .as_str()
-        .unwrap()
-        .to_string();
+    let plain_id =
+        serde_json::from_slice::<serde_json::Value>(&plain.stdout).unwrap()["message_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
 
     // A terminal ack from the awaited agent closes the ask.
     let closed = run(&bus, &["ack", "bob", &ask_id, "--status", "done", "--json"]);
@@ -3715,7 +4451,10 @@ fn ack_reports_whether_it_closed_an_open_ask() {
     assert_eq!(again_json["closed_ask"], false);
 
     // Acking a plain (non-ask) message still works, but closes no ask.
-    let plain_ack = run(&bus, &["ack", "bob", &plain_id, "--status", "done", "--json"]);
+    let plain_ack = run(
+        &bus,
+        &["ack", "bob", &plain_id, "--status", "done", "--json"],
+    );
     let plain_ack_json: serde_json::Value = serde_json::from_slice(&plain_ack.stdout).unwrap();
     assert_eq!(plain_ack_json["was_awaited"], false);
     assert_eq!(plain_ack_json["closed_ask"], false);
@@ -3723,7 +4462,15 @@ fn ack_reports_whether_it_closed_an_open_ask() {
     // --require-open rejects a terminal ack that closes nothing.
     let rejected = run_fail(
         &bus,
-        &["ack", "bob", &plain_id, "--status", "done", "--require-open", "--json"],
+        &[
+            "ack",
+            "bob",
+            &plain_id,
+            "--status",
+            "done",
+            "--require-open",
+            "--json",
+        ],
     );
     let rejected_json: serde_json::Value = serde_json::from_slice(&rejected.stderr).unwrap();
     assert_eq!(rejected_json["error"]["code"], "not_awaited");
@@ -3733,19 +4480,37 @@ fn ack_reports_whether_it_closed_an_open_ask() {
     let ask2 = run(
         &bus,
         &[
-            "send", "--conversation", "c", "--from", "alice", "--to", "bob",
-            "--subject", "Q2", "--body", "x", "--requires-ack", "--json",
+            "send",
+            "--conversation",
+            "c",
+            "--from",
+            "alice",
+            "--to",
+            "bob",
+            "--subject",
+            "Q2",
+            "--body",
+            "x",
+            "--requires-ack",
+            "--json",
         ],
     );
-    let ask2_id = serde_json::from_slice::<serde_json::Value>(&ask2.stdout).unwrap()
-        ["message_id"]
+    let ask2_id = serde_json::from_slice::<serde_json::Value>(&ask2.stdout).unwrap()["message_id"]
         .as_str()
         .unwrap()
         .to_string();
     // alice (the sender) is not in the awaited set for her own ask.
     let self_ack = run_fail(
         &bus,
-        &["ack", "alice", &ask2_id, "--status", "done", "--require-open", "--json"],
+        &[
+            "ack",
+            "alice",
+            &ask2_id,
+            "--status",
+            "done",
+            "--require-open",
+            "--json",
+        ],
     );
     let self_json: serde_json::Value = serde_json::from_slice(&self_ack.stderr).unwrap();
     assert_eq!(self_json["error"]["code"], "not_awaited");
@@ -3761,22 +4526,46 @@ fn search_filters_by_from_kind_and_mentions() {
     run(
         &bus,
         &[
-            "conversation", "create", "c", "--participants", "alice,bob,carol",
-            "--starter", "alice",
+            "conversation",
+            "create",
+            "c",
+            "--participants",
+            "alice,bob,carol",
+            "--starter",
+            "alice",
         ],
     );
     run(
         &bus,
         &[
-            "send", "--conversation", "c", "--from", "alice", "--to", "bob",
-            "--subject", "deploy", "--body", "ship it @carol", "--requires-ack",
+            "send",
+            "--conversation",
+            "c",
+            "--from",
+            "alice",
+            "--to",
+            "bob",
+            "--subject",
+            "deploy",
+            "--body",
+            "ship it @carol",
+            "--requires-ack",
         ],
     );
     run(
         &bus,
         &[
-            "send", "--conversation", "c", "--from", "bob", "--to", "alice",
-            "--subject", "status", "--body", "deploy is green",
+            "send",
+            "--conversation",
+            "c",
+            "--from",
+            "bob",
+            "--to",
+            "alice",
+            "--subject",
+            "status",
+            "--body",
+            "deploy is green",
         ],
     );
 
@@ -3789,32 +4578,52 @@ fn search_filters_by_from_kind_and_mentions() {
     };
 
     // --from filters to a single sender.
-    let from_bob = run(&bus, &["search", "--agent", "alice", "--from", "bob", "--json"]);
+    let from_bob = run(
+        &bus,
+        &["search", "--agent", "alice", "--from", "bob", "--json"],
+    );
     assert_eq!(ids(&from_bob), vec!["bob".to_string()]);
 
     // --mentions matches the @carol mention as well as the to[] recipient.
-    let mentions_carol =
-        run(&bus, &["search", "--agent", "alice", "--mentions", "carol", "--json"]);
+    let mentions_carol = run(
+        &bus,
+        &[
+            "search",
+            "--agent",
+            "alice",
+            "--mentions",
+            "carol",
+            "--json",
+        ],
+    );
     assert_eq!(ids(&mentions_carol), vec!["alice".to_string()]);
-    let mentions_bob =
-        run(&bus, &["search", "--agent", "alice", "--mentions", "bob", "--json"]);
+    let mentions_bob = run(
+        &bus,
+        &["search", "--agent", "alice", "--mentions", "bob", "--json"],
+    );
     assert_eq!(ids(&mentions_bob), vec!["alice".to_string()]);
 
     // Pattern + filter combine conjunctively.
     let combo = run(
         &bus,
-        &["search", "deploy", "--agent", "alice", "--from", "alice", "--json"],
+        &[
+            "search", "deploy", "--agent", "alice", "--from", "alice", "--json",
+        ],
     );
     assert_eq!(ids(&combo), vec!["alice".to_string()]);
     let no_combo = run(
         &bus,
-        &["search", "deploy", "--agent", "alice", "--from", "carol", "--json"],
+        &[
+            "search", "deploy", "--agent", "alice", "--from", "carol", "--json",
+        ],
     );
     assert!(ids(&no_combo).is_empty());
 
     // --kind selects message-kind rows.
-    let kind_message =
-        run(&bus, &["search", "--agent", "alice", "--kind", "message", "--json"]);
+    let kind_message = run(
+        &bus,
+        &["search", "--agent", "alice", "--kind", "message", "--json"],
+    );
     assert_eq!(ids(&kind_message).len(), 2);
 
     // No criteria at all is rejected.
@@ -3838,16 +4647,30 @@ fn search_mentions_matches_wildcard_broadcasts_to_room_members() {
     run(
         &bus,
         &[
-            "conversation", "create", "c", "--participants", "alice,bob",
-            "--starter", "alice",
+            "conversation",
+            "create",
+            "c",
+            "--participants",
+            "alice,bob",
+            "--starter",
+            "alice",
         ],
     );
     // Alice broadcasts to the whole room with `*`; bob is never named literally.
     let sent = run(
         &bus,
         &[
-            "send", "--conversation", "c", "--from", "alice", "--to", "*",
-            "--subject", "all-hands", "--body", "standup in 5",
+            "send",
+            "--conversation",
+            "c",
+            "--from",
+            "alice",
+            "--to",
+            "*",
+            "--subject",
+            "all-hands",
+            "--body",
+            "standup in 5",
         ],
     );
     let broadcast_id = String::from_utf8_lossy(&sent.stdout).trim().to_string();
@@ -3862,12 +4685,24 @@ fn search_mentions_matches_wildcard_broadcasts_to_room_members() {
 
     // `--mentions bob` surfaces the broadcast even though bob is only reached
     // via `*`, because bob is a participant of the room.
-    let for_bob = run(&bus, &["search", "--agent", "alice", "--mentions", "bob", "--json"]);
+    let for_bob = run(
+        &bus,
+        &["search", "--agent", "alice", "--mentions", "bob", "--json"],
+    );
     assert_eq!(ids(&for_bob), vec![broadcast_id.clone()]);
 
     // A non-member is not surfaced by the wildcard expansion.
-    let for_ghost =
-        run(&bus, &["search", "--agent", "alice", "--mentions", "ghost", "--json"]);
+    let for_ghost = run(
+        &bus,
+        &[
+            "search",
+            "--agent",
+            "alice",
+            "--mentions",
+            "ghost",
+            "--json",
+        ],
+    );
     assert!(ids(&for_ghost).is_empty());
 }
 
@@ -3880,15 +4715,30 @@ fn open_asks_report_whether_the_awaited_agent_is_live() {
     run(
         &bus,
         &[
-            "conversation", "create", "c", "--participants", "alice,bob",
-            "--starter", "alice",
+            "conversation",
+            "create",
+            "c",
+            "--participants",
+            "alice,bob",
+            "--starter",
+            "alice",
         ],
     );
     run(
         &bus,
         &[
-            "send", "--conversation", "c", "--from", "alice", "--to", "bob",
-            "--subject", "Q", "--body", "ship it", "--requires-ack",
+            "send",
+            "--conversation",
+            "c",
+            "--from",
+            "alice",
+            "--to",
+            "bob",
+            "--subject",
+            "Q",
+            "--body",
+            "ship it",
+            "--requires-ack",
         ],
     );
 
@@ -3904,8 +4754,7 @@ fn open_asks_report_whether_the_awaited_agent_is_live() {
     // Expire bob's heartbeat: now the same ask reports a dead delegate, the
     // signal an asker needs to decide whether to re-route or escalate.
     let bob = bus.join("agents").join("bob.json");
-    let mut agent: serde_json::Value =
-        serde_json::from_slice(&fs::read(&bob).unwrap()).unwrap();
+    let mut agent: serde_json::Value = serde_json::from_slice(&fs::read(&bob).unwrap()).unwrap();
     agent["expires_at"] = serde_json::json!("2000-01-01T00:00:00Z");
     fs::write(&bob, serde_json::to_vec(&agent).unwrap()).unwrap();
 
@@ -3930,15 +4779,19 @@ fn send_envelope_flags_offline_recipients() {
     run(
         &bus,
         &[
-            "conversation", "create", "c", "--participants", "alice,bob,carol",
-            "--starter", "alice",
+            "conversation",
+            "create",
+            "c",
+            "--participants",
+            "alice,bob,carol",
+            "--starter",
+            "alice",
         ],
     );
 
     // Expire bob's heartbeat so he reads as offline; carol stays live.
     let bob = bus.join("agents").join("bob.json");
-    let mut agent: serde_json::Value =
-        serde_json::from_slice(&fs::read(&bob).unwrap()).unwrap();
+    let mut agent: serde_json::Value = serde_json::from_slice(&fs::read(&bob).unwrap()).unwrap();
     agent["expires_at"] = serde_json::json!("2000-01-01T00:00:00Z");
     fs::write(&bob, serde_json::to_vec(&agent).unwrap()).unwrap();
 
@@ -3957,8 +4810,19 @@ fn send_envelope_flags_offline_recipients() {
     let mixed = run(
         &bus,
         &[
-            "send", "--conversation", "c", "--from", "alice", "--to", "bob,carol",
-            "--subject", "Q", "--body", "ship it", "--requires-ack", "--json",
+            "send",
+            "--conversation",
+            "c",
+            "--from",
+            "alice",
+            "--to",
+            "bob,carol",
+            "--subject",
+            "Q",
+            "--body",
+            "ship it",
+            "--requires-ack",
+            "--json",
         ],
     );
     assert_eq!(offline(&mixed), vec!["bob".to_string()]);
@@ -3967,8 +4831,18 @@ fn send_envelope_flags_offline_recipients() {
     let live_only = run(
         &bus,
         &[
-            "send", "--conversation", "c", "--from", "alice", "--to", "carol",
-            "--subject", "hi", "--body", "yo", "--json",
+            "send",
+            "--conversation",
+            "c",
+            "--from",
+            "alice",
+            "--to",
+            "carol",
+            "--subject",
+            "hi",
+            "--body",
+            "yo",
+            "--json",
         ],
     );
     assert!(offline(&live_only).is_empty());
@@ -3978,8 +4852,18 @@ fn send_envelope_flags_offline_recipients() {
     let broadcast = run(
         &bus,
         &[
-            "send", "--conversation", "c", "--from", "alice", "--to", "*",
-            "--subject", "all", "--body", "hey", "--json",
+            "send",
+            "--conversation",
+            "c",
+            "--from",
+            "alice",
+            "--to",
+            "*",
+            "--subject",
+            "all",
+            "--body",
+            "hey",
+            "--json",
         ],
     );
     assert_eq!(offline(&broadcast), vec!["bob".to_string()]);
@@ -3988,8 +4872,17 @@ fn send_envelope_flags_offline_recipients() {
     let text = run(
         &bus,
         &[
-            "send", "--conversation", "c", "--from", "alice", "--to", "bob",
-            "--subject", "t", "--body", "x",
+            "send",
+            "--conversation",
+            "c",
+            "--from",
+            "alice",
+            "--to",
+            "bob",
+            "--subject",
+            "t",
+            "--body",
+            "x",
         ],
     );
     assert!(
@@ -4011,9 +4904,19 @@ fn rate_limit_and_size_errors_carry_recovery_details() {
     run(
         &bus,
         &[
-            "conversation", "create", "c", "--participants", "alice,bob",
-            "--starter", "alice", "--rate-max", "2", "--rate-window", "60",
-            "--max-message-bytes", "10",
+            "conversation",
+            "create",
+            "c",
+            "--participants",
+            "alice,bob",
+            "--starter",
+            "alice",
+            "--rate-max",
+            "2",
+            "--rate-window",
+            "60",
+            "--max-message-bytes",
+            "10",
         ],
     );
 
@@ -4022,8 +4925,18 @@ fn rate_limit_and_size_errors_carry_recovery_details() {
     let too_large = run_fail(
         &bus,
         &[
-            "send", "--conversation", "c", "--from", "alice", "--to", "bob",
-            "--subject", "x", "--body", "this body is way too long", "--json",
+            "send",
+            "--conversation",
+            "c",
+            "--from",
+            "alice",
+            "--to",
+            "bob",
+            "--subject",
+            "x",
+            "--body",
+            "this body is way too long",
+            "--json",
         ],
     );
     let big: serde_json::Value = serde_json::from_slice(&too_large.stderr).unwrap();
@@ -4036,22 +4949,52 @@ fn rate_limit_and_size_errors_carry_recovery_details() {
     run(
         &bus,
         &[
-            "send", "--conversation", "c", "--from", "alice", "--to", "bob",
-            "--subject", "a", "--body", "hi", "--json",
+            "send",
+            "--conversation",
+            "c",
+            "--from",
+            "alice",
+            "--to",
+            "bob",
+            "--subject",
+            "a",
+            "--body",
+            "hi",
+            "--json",
         ],
     );
     run(
         &bus,
         &[
-            "send", "--conversation", "c", "--from", "alice", "--to", "bob",
-            "--subject", "b", "--body", "yo", "--json",
+            "send",
+            "--conversation",
+            "c",
+            "--from",
+            "alice",
+            "--to",
+            "bob",
+            "--subject",
+            "b",
+            "--body",
+            "yo",
+            "--json",
         ],
     );
     let limited = run_fail(
         &bus,
         &[
-            "send", "--conversation", "c", "--from", "alice", "--to", "bob",
-            "--subject", "c", "--body", "no", "--json",
+            "send",
+            "--conversation",
+            "c",
+            "--from",
+            "alice",
+            "--to",
+            "bob",
+            "--subject",
+            "c",
+            "--body",
+            "no",
+            "--json",
         ],
     );
     let err: serde_json::Value = serde_json::from_slice(&limited.stderr).unwrap();
@@ -4087,7 +5030,9 @@ fn help_lists_every_valid_enumeration_value() {
 
     // Ack statuses: the summary previously truncated the set with "...".
     let ack_help = help_of(&["ack", "--help"]);
-    for value in ["received", "accepted", "working", "blocked", "done", "rejected"] {
+    for value in [
+        "received", "accepted", "working", "blocked", "done", "rejected",
+    ] {
         assert!(
             ack_help.contains(value),
             "ack --help should list the {value:?} status"
@@ -4113,15 +5058,31 @@ fn withdraw_closes_an_open_ask_the_sender_no_longer_needs() {
     run(
         &bus,
         &[
-            "conversation", "create", "c", "--participants", "alice,bob",
-            "--starter", "alice",
+            "conversation",
+            "create",
+            "c",
+            "--participants",
+            "alice,bob",
+            "--starter",
+            "alice",
         ],
     );
     let sent = run(
         &bus,
         &[
-            "send", "--conversation", "c", "--from", "alice", "--to", "bob",
-            "--subject", "Q", "--body", "ship it", "--needs-response-from", "bob",
+            "send",
+            "--conversation",
+            "c",
+            "--from",
+            "alice",
+            "--to",
+            "bob",
+            "--subject",
+            "Q",
+            "--body",
+            "ship it",
+            "--needs-response-from",
+            "bob",
         ],
     );
     let message_id = String::from_utf8_lossy(&sent.stdout).trim().to_string();
@@ -4139,7 +5100,15 @@ fn withdraw_closes_an_open_ask_the_sender_no_longer_needs() {
     // The sender withdraws; the response set it releases names bob.
     let withdrawn = run(
         &bus,
-        &["withdraw", &message_id, "--from", "alice", "--reason", "moot", "--json"],
+        &[
+            "withdraw",
+            &message_id,
+            "--from",
+            "alice",
+            "--reason",
+            "moot",
+            "--json",
+        ],
     );
     let withdrawn_json: serde_json::Value = serde_json::from_slice(&withdrawn.stdout).unwrap();
     assert_eq!(withdrawn_json["ok"], true);
@@ -4156,13 +5125,21 @@ fn withdraw_closes_an_open_ask_the_sender_no_longer_needs() {
     assert!(bob_after_json["you_owe"].as_array().unwrap().is_empty());
     let alice_after = run(&bus, &["awaiting", "alice", "--json"]);
     let alice_after_json: serde_json::Value = serde_json::from_slice(&alice_after.stdout).unwrap();
-    assert!(alice_after_json["owed_to_you"].as_array().unwrap().is_empty());
+    assert!(
+        alice_after_json["owed_to_you"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
 
     // The released worker gets a discoverable lifecycle notice naming the ask
     // and carrying the reason, so the silent disappearance from `you_owe` has an
     // explanation. Like other system notices it is not a new unread item or an
     // open ask for bob.
-    let bob_view = run(&bus, &["show", "--agent", "bob", "--conversation", "c", "--json"]);
+    let bob_view = run(
+        &bus,
+        &["show", "--agent", "bob", "--conversation", "c", "--json"],
+    );
     let bob_view_json: serde_json::Value = serde_json::from_slice(&bob_view.stdout).unwrap();
     let notice = bob_view_json
         .as_array()
@@ -4179,7 +5156,10 @@ fn withdraw_closes_an_open_ask_the_sender_no_longer_needs() {
     assert!(body.contains("moot"), "notice should carry the reason");
 
     // Withdrawing again is an idempotent no-op success.
-    let again = run(&bus, &["withdraw", &message_id, "--from", "alice", "--json"]);
+    let again = run(
+        &bus,
+        &["withdraw", &message_id, "--from", "alice", "--json"],
+    );
     let again_json: serde_json::Value = serde_json::from_slice(&again.stdout).unwrap();
     assert_eq!(again_json["ok"], true);
     assert_eq!(again_json["already_withdrawn"], true);
@@ -4196,27 +5176,62 @@ fn withdraw_excludes_recipients_who_already_responded() {
     run(
         &bus,
         &[
-            "conversation", "create", "c", "--participants", "alice,bob,carol",
-            "--starter", "alice",
+            "conversation",
+            "create",
+            "c",
+            "--participants",
+            "alice,bob,carol",
+            "--starter",
+            "alice",
         ],
     );
     let sent = run(
         &bus,
         &[
-            "send", "--conversation", "c", "--from", "alice", "--to", "bob,carol",
-            "--subject", "Q", "--body", "both please", "--needs-response-from", "bob,carol",
+            "send",
+            "--conversation",
+            "c",
+            "--from",
+            "alice",
+            "--to",
+            "bob,carol",
+            "--subject",
+            "Q",
+            "--body",
+            "both please",
+            "--needs-response-from",
+            "bob,carol",
         ],
     );
     let message_id = String::from_utf8_lossy(&sent.stdout).trim().to_string();
 
     // bob finishes and reports done; only carol still owes a reply.
-    run(&bus, &["ack", "bob", &message_id, "--status", "done", "--note", "ok"]);
+    run(
+        &bus,
+        &[
+            "ack",
+            "bob",
+            &message_id,
+            "--status",
+            "done",
+            "--note",
+            "ok",
+        ],
+    );
 
     // Withdrawing must release only the still-open obligation (carol), not bob,
     // who already discharged the ask.
     let withdrawn = run(
         &bus,
-        &["withdraw", &message_id, "--from", "alice", "--reason", "moot", "--json"],
+        &[
+            "withdraw",
+            &message_id,
+            "--from",
+            "alice",
+            "--reason",
+            "moot",
+            "--json",
+        ],
     );
     let withdrawn_json: serde_json::Value = serde_json::from_slice(&withdrawn.stdout).unwrap();
     assert_eq!(
@@ -4227,7 +5242,10 @@ fn withdraw_excludes_recipients_who_already_responded() {
 
     // bob, who already finished, must NOT get an `ask withdrawn` notice telling
     // him to stop work he already completed.
-    let bob_view = run(&bus, &["show", "--agent", "bob", "--conversation", "c", "--json"]);
+    let bob_view = run(
+        &bus,
+        &["show", "--agent", "bob", "--conversation", "c", "--json"],
+    );
     let bob_view_json: serde_json::Value = serde_json::from_slice(&bob_view.stdout).unwrap();
     assert!(
         bob_view_json
@@ -4239,7 +5257,10 @@ fn withdraw_excludes_recipients_who_already_responded() {
     );
 
     // carol, the genuinely-released worker, does get the notice.
-    let carol_view = run(&bus, &["show", "--agent", "carol", "--conversation", "c", "--json"]);
+    let carol_view = run(
+        &bus,
+        &["show", "--agent", "carol", "--conversation", "c", "--json"],
+    );
     let carol_view_json: serde_json::Value = serde_json::from_slice(&carol_view.stdout).unwrap();
     assert!(
         carol_view_json
@@ -4260,20 +5281,37 @@ fn withdraw_rejects_a_message_that_is_not_an_open_ask() {
     run(
         &bus,
         &[
-            "conversation", "create", "c", "--participants", "alice,bob",
-            "--starter", "alice",
+            "conversation",
+            "create",
+            "c",
+            "--participants",
+            "alice,bob",
+            "--starter",
+            "alice",
         ],
     );
     // A plain message with no ack expectation is not an open ask.
     let sent = run(
         &bus,
         &[
-            "send", "--conversation", "c", "--from", "alice", "--to", "bob",
-            "--subject", "FYI", "--body", "no reply needed",
+            "send",
+            "--conversation",
+            "c",
+            "--from",
+            "alice",
+            "--to",
+            "bob",
+            "--subject",
+            "FYI",
+            "--body",
+            "no reply needed",
         ],
     );
     let message_id = String::from_utf8_lossy(&sent.stdout).trim().to_string();
-    let denied = run_fail(&bus, &["withdraw", &message_id, "--from", "alice", "--json"]);
+    let denied = run_fail(
+        &bus,
+        &["withdraw", &message_id, "--from", "alice", "--json"],
+    );
     let denied_json: serde_json::Value = serde_json::from_slice(&denied.stderr).unwrap();
     assert_eq!(denied_json["error"]["code"], "not_found");
 }
@@ -4287,21 +5325,45 @@ fn ack_of_a_withdrawn_ask_is_distinguishable_from_never_awaited() {
     run(
         &bus,
         &[
-            "conversation", "create", "c", "--participants", "alice,bob",
-            "--starter", "alice",
+            "conversation",
+            "create",
+            "c",
+            "--participants",
+            "alice,bob",
+            "--starter",
+            "alice",
         ],
     );
     let sent = run(
         &bus,
         &[
-            "send", "--conversation", "c", "--from", "alice", "--to", "bob",
-            "--subject", "Q", "--body", "ship it", "--needs-response-from", "bob",
+            "send",
+            "--conversation",
+            "c",
+            "--from",
+            "alice",
+            "--to",
+            "bob",
+            "--subject",
+            "Q",
+            "--body",
+            "ship it",
+            "--needs-response-from",
+            "bob",
         ],
     );
     let message_id = String::from_utf8_lossy(&sent.stdout).trim().to_string();
     run(
         &bus,
-        &["withdraw", &message_id, "--from", "alice", "--reason", "moot", "--json"],
+        &[
+            "withdraw",
+            &message_id,
+            "--from",
+            "alice",
+            "--reason",
+            "moot",
+            "--json",
+        ],
     );
 
     // Bob raced the withdrawal and acks anyway. The envelope must carry the
@@ -4328,7 +5390,15 @@ fn ack_of_a_withdrawn_ask_is_distinguishable_from_never_awaited() {
     // the withdrawal rather than looking identical to never-awaited.
     let strict = run_fail(
         &bus,
-        &["ack", "bob", &message_id, "--status", "done", "--require-open", "--json"],
+        &[
+            "ack",
+            "bob",
+            &message_id,
+            "--status",
+            "done",
+            "--require-open",
+            "--json",
+        ],
     );
     let strict_json: serde_json::Value = serde_json::from_slice(&strict.stderr).unwrap();
     assert_eq!(strict_json["error"]["code"], "not_awaited");
@@ -4339,8 +5409,17 @@ fn ack_of_a_withdrawn_ask_is_distinguishable_from_never_awaited() {
     let fyi = run(
         &bus,
         &[
-            "send", "--conversation", "c", "--from", "alice", "--to", "bob",
-            "--subject", "FYI", "--body", "no reply needed",
+            "send",
+            "--conversation",
+            "c",
+            "--from",
+            "alice",
+            "--to",
+            "bob",
+            "--subject",
+            "FYI",
+            "--body",
+            "no reply needed",
         ],
     );
     let fyi_id = String::from_utf8_lossy(&fyi.stdout).trim().to_string();
@@ -4365,8 +5444,7 @@ fn me_reports_the_agents_own_heartbeat_liveness() {
     // Expire alice's heartbeat: liveness is computed for the agent itself, not
     // just peers, so `me` must now report the agent as stale.
     let alice = bus.join("agents").join("alice.json");
-    let mut agent: serde_json::Value =
-        serde_json::from_slice(&fs::read(&alice).unwrap()).unwrap();
+    let mut agent: serde_json::Value = serde_json::from_slice(&fs::read(&alice).unwrap()).unwrap();
     agent["expires_at"] = serde_json::json!("2000-01-01T00:00:00Z");
     fs::write(&alice, serde_json::to_vec(&agent).unwrap()).unwrap();
 
@@ -4430,7 +5508,10 @@ fn wait_fails_fast_for_an_unclaimed_agent() {
     );
 
     // The same guard covers the resolution path (`--owed`/`--resolved`).
-    let owed = run_fail(&bus, &["wait", "alise", "--owed", "--timeout", "30", "--json"]);
+    let owed = run_fail(
+        &bus,
+        &["wait", "alise", "--owed", "--timeout", "30", "--json"],
+    );
     let owed_err: serde_json::Value = serde_json::from_slice(&owed.stderr).unwrap();
     assert_eq!(owed_err["error"]["code"], "not_claimed");
 }
@@ -4445,7 +5526,12 @@ fn bare_reply_reports_thread_participants_it_did_not_reach() {
     run(
         &bus,
         &[
-            "conversation", "create", "trio", "--participants", "alice,bob,carol", "--starter",
+            "conversation",
+            "create",
+            "trio",
+            "--participants",
+            "alice,bob,carol",
+            "--starter",
             "alice",
         ],
     );
@@ -4454,8 +5540,18 @@ fn bare_reply_reports_thread_participants_it_did_not_reach() {
     let sent = run(
         &bus,
         &[
-            "send", "--conversation", "trio", "--from", "alice", "--to", "bob,carol", "--subject",
-            "plan", "--body", "thoughts?", "--json",
+            "send",
+            "--conversation",
+            "trio",
+            "--from",
+            "alice",
+            "--to",
+            "bob,carol",
+            "--subject",
+            "plan",
+            "--body",
+            "thoughts?",
+            "--json",
         ],
     );
     let sent_json: serde_json::Value = serde_json::from_slice(&sent.stdout).unwrap();
@@ -4465,7 +5561,9 @@ fn bare_reply_reports_thread_participants_it_did_not_reach() {
     // silently dropping carol. The envelope names carol so bob can re-address.
     let reply = run(
         &bus,
-        &["reply", parent_id, "--from", "bob", "--body", "ack", "--json"],
+        &[
+            "reply", parent_id, "--from", "bob", "--body", "ack", "--json",
+        ],
     );
     let reply_json: serde_json::Value = serde_json::from_slice(&reply.stdout).unwrap();
     assert_eq!(reply_json["to"], serde_json::json!(["alice"]));
@@ -4480,13 +5578,23 @@ fn bare_reply_reports_thread_participants_it_did_not_reach() {
     let full = run(
         &bus,
         &[
-            "reply", parent_id, "--from", "bob", "--to", "alice,carol", "--body", "ack all",
+            "reply",
+            parent_id,
+            "--from",
+            "bob",
+            "--to",
+            "alice,carol",
+            "--body",
+            "ack all",
             "--json",
         ],
     );
     let full_json: serde_json::Value = serde_json::from_slice(&full.stdout).unwrap();
     assert!(
-        full_json["omitted_recipients"].as_array().unwrap().is_empty(),
+        full_json["omitted_recipients"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
         "explicit --to covering the thread should omit nobody"
     );
 }
@@ -4500,7 +5608,13 @@ fn open_asks_label_whether_a_reply_or_a_bare_ack_is_expected() {
     run(
         &bus,
         &[
-            "conversation", "create", "room", "--participants", "alice,bob", "--starter", "alice",
+            "conversation",
+            "create",
+            "room",
+            "--participants",
+            "alice,bob",
+            "--starter",
+            "alice",
         ],
     );
 
@@ -4508,16 +5622,37 @@ fn open_asks_label_whether_a_reply_or_a_bare_ack_is_expected() {
     run(
         &bus,
         &[
-            "send", "--conversation", "room", "--from", "alice", "--to", "bob", "--subject",
-            "deploy", "--body", "ship it", "--requires-ack",
+            "send",
+            "--conversation",
+            "room",
+            "--from",
+            "alice",
+            "--to",
+            "bob",
+            "--subject",
+            "deploy",
+            "--body",
+            "ship it",
+            "--requires-ack",
         ],
     );
     // A --needs-response-from ask: the sender wants a substantive reply.
     run(
         &bus,
         &[
-            "send", "--conversation", "room", "--from", "alice", "--to", "bob", "--subject",
-            "design", "--body", "thoughts?", "--needs-response-from", "bob",
+            "send",
+            "--conversation",
+            "room",
+            "--from",
+            "alice",
+            "--to",
+            "bob",
+            "--subject",
+            "design",
+            "--body",
+            "thoughts?",
+            "--needs-response-from",
+            "bob",
         ],
     );
 
@@ -4548,14 +5683,31 @@ fn read_reports_that_an_ask_is_still_owed_after_reading() {
     run(
         &bus,
         &[
-            "conversation", "create", "room", "--participants", "alice,bob", "--starter", "alice",
+            "conversation",
+            "create",
+            "room",
+            "--participants",
+            "alice,bob",
+            "--starter",
+            "alice",
         ],
     );
     let sent = run(
         &bus,
         &[
-            "send", "--conversation", "room", "--from", "alice", "--to", "bob", "--subject",
-            "deploy", "--body", "ship it", "--requires-ack", "--json",
+            "send",
+            "--conversation",
+            "room",
+            "--from",
+            "alice",
+            "--to",
+            "bob",
+            "--subject",
+            "deploy",
+            "--body",
+            "ship it",
+            "--requires-ack",
+            "--json",
         ],
     );
     let sent_json: serde_json::Value = serde_json::from_slice(&sent.stdout).unwrap();
@@ -4593,16 +5745,37 @@ fn watch_emits_a_late_message_whose_id_sorts_below_the_cursor() {
     run(&bus, &["init"]);
     run(
         &bus,
-        &["conversation", "create", "c", "--participants", "a,b", "--starter", "a"],
+        &[
+            "conversation",
+            "create",
+            "c",
+            "--participants",
+            "a,b",
+            "--starter",
+            "a",
+        ],
     );
     let sent = run(
         &bus,
-        &["send", "--conversation", "c", "--from", "a", "--to", "b", "--body", "high id"],
+        &[
+            "send",
+            "--conversation",
+            "c",
+            "--from",
+            "a",
+            "--to",
+            "b",
+            "--body",
+            "high id",
+        ],
     );
     let high_id = String::from_utf8_lossy(&sent.stdout).trim().to_string();
 
     // First watch emits the high-id message and advances the cursor to it.
-    let first = run(&bus, &["watch", "--agent", "b", "--conversation", "c", "--once"]);
+    let first = run(
+        &bus,
+        &["watch", "--agent", "b", "--conversation", "c", "--once"],
+    );
     assert!(String::from_utf8_lossy(&first.stdout).contains(&high_id));
     let state: serde_json::Value =
         serde_json::from_slice(&fs::read(bus.join("watch/b.json")).unwrap()).unwrap();
@@ -4626,14 +5799,20 @@ fn watch_emits_a_late_message_whose_id_sorts_below_the_cursor() {
 
     // The low-id message is below the persisted cursor but unread; auto-read
     // watch must still deliver it (the old scalar-cursor logic dropped it).
-    let second = run(&bus, &["watch", "--agent", "b", "--conversation", "c", "--once"]);
+    let second = run(
+        &bus,
+        &["watch", "--agent", "b", "--conversation", "c", "--once"],
+    );
     let out = String::from_utf8_lossy(&second.stdout);
     assert!(
         out.contains(low_id),
         "watch must not skip an unread message whose id sorts below the cursor; got: {out:?}"
     );
     // And it does not re-emit the already-read high-id message.
-    assert!(!out.contains(&high_id), "already-read message must not re-emit");
+    assert!(
+        !out.contains(&high_id),
+        "already-read message must not re-emit"
+    );
 }
 
 #[test]
@@ -4643,7 +5822,10 @@ fn channel_joiner_is_not_flooded_with_pre_join_broadcasts() {
     run(&bus, &["claim", "alice", "--workspace", "."]);
     run(&bus, &["claim", "bob", "--workspace", "."]);
     run(&bus, &["claim", "carol", "--workspace", "."]);
-    run(&bus, &["channel", "create", "general", "--creator", "alice"]);
+    run(
+        &bus,
+        &["channel", "create", "general", "--creator", "alice"],
+    );
     run(&bus, &["channel", "join", "general", "--agent", "bob"]);
     run(&bus, &["channel", "join", "general", "--agent", "carol"]);
 
@@ -4651,8 +5833,18 @@ fn channel_joiner_is_not_flooded_with_pre_join_broadcasts() {
     let old = run(
         &bus,
         &[
-            "send", "--channel", "general", "--from", "alice", "--to", "*",
-            "--subject", "history", "--body", "ancient broadcast", "--requires-ack",
+            "send",
+            "--channel",
+            "general",
+            "--from",
+            "alice",
+            "--to",
+            "*",
+            "--subject",
+            "history",
+            "--body",
+            "ancient broadcast",
+            "--requires-ack",
         ],
     );
     let old_id = String::from_utf8_lossy(&old.stdout).trim().to_string();
@@ -4675,7 +5867,10 @@ fn channel_joiner_is_not_flooded_with_pre_join_broadcasts() {
     fs::write(&old_path, serde_json::to_vec(&old_msg).unwrap()).unwrap();
 
     // The pre-join broadcast is backlog for carol: not unread, not owed.
-    let carol_inbox = run(&bus, &["inbox", "carol", "--channel", "general", "--unread"]);
+    let carol_inbox = run(
+        &bus,
+        &["inbox", "carol", "--channel", "general", "--unread"],
+    );
     assert!(
         !String::from_utf8_lossy(&carol_inbox.stdout).contains("ancient broadcast"),
         "a late joiner must not see pre-join broadcasts as unread"
@@ -4698,19 +5893,31 @@ fn channel_joiner_is_not_flooded_with_pre_join_broadcasts() {
     let fresh = run(
         &bus,
         &[
-            "send", "--channel", "general", "--from", "alice", "--to", "*",
-            "--subject", "now", "--body", "fresh broadcast", "--requires-ack",
+            "send",
+            "--channel",
+            "general",
+            "--from",
+            "alice",
+            "--to",
+            "*",
+            "--subject",
+            "now",
+            "--body",
+            "fresh broadcast",
+            "--requires-ack",
         ],
     );
     let fresh_id = String::from_utf8_lossy(&fresh.stdout).trim().to_string();
-    let carol_inbox2 = run(&bus, &["inbox", "carol", "--channel", "general", "--unread"]);
+    let carol_inbox2 = run(
+        &bus,
+        &["inbox", "carol", "--channel", "general", "--unread"],
+    );
     assert!(
         String::from_utf8_lossy(&carol_inbox2.stdout).contains("fresh broadcast"),
         "a post-join broadcast must reach the joiner as unread"
     );
     let carol_owes2 = run(&bus, &["awaiting", "carol", "--json"]);
-    let carol_owes2_json: serde_json::Value =
-        serde_json::from_slice(&carol_owes2.stdout).unwrap();
+    let carol_owes2_json: serde_json::Value = serde_json::from_slice(&carol_owes2.stdout).unwrap();
     assert_eq!(carol_owes2_json["you_owe"][0]["message_id"], fresh_id);
 }
 
@@ -4724,8 +5931,13 @@ fn an_ask_can_require_a_reply_from_one_agent_and_an_ack_from_everyone() {
     run(
         &bus,
         &[
-            "conversation", "create", "room", "--participants", "asker,lead,crew",
-            "--starter", "asker",
+            "conversation",
+            "create",
+            "room",
+            "--participants",
+            "asker,lead,crew",
+            "--starter",
+            "asker",
         ],
     );
 
@@ -4735,9 +5947,20 @@ fn an_ask_can_require_a_reply_from_one_agent_and_an_ack_from_everyone() {
     let sent = run(
         &bus,
         &[
-            "send", "--conversation", "room", "--from", "asker", "--to", "*",
-            "--subject", "ship", "--body", "lead drives; everyone ack",
-            "--needs-response-from", "lead", "--requires-ack",
+            "send",
+            "--conversation",
+            "room",
+            "--from",
+            "asker",
+            "--to",
+            "*",
+            "--subject",
+            "ship",
+            "--body",
+            "lead drives; everyone ack",
+            "--needs-response-from",
+            "lead",
+            "--requires-ack",
         ],
     );
     let msg_id = String::from_utf8_lossy(&sent.stdout).trim().to_string();
@@ -4754,8 +5977,14 @@ fn an_ask_can_require_a_reply_from_one_agent_and_an_ack_from_everyone() {
             ask["await_kind"].as_str().unwrap().to_string(),
         );
     }
-    assert_eq!(by_agent.get("lead").map(String::as_str), Some("needs_response"));
-    assert_eq!(by_agent.get("crew").map(String::as_str), Some("requires_ack"));
+    assert_eq!(
+        by_agent.get("lead").map(String::as_str),
+        Some("needs_response")
+    );
+    assert_eq!(
+        by_agent.get("crew").map(String::as_str),
+        Some("requires_ack")
+    );
 
     // crew's bare ack closes only crew's obligation; lead still owes a reply, so
     // the asker is not yet fully satisfied.
@@ -4769,7 +5998,11 @@ fn an_ask_can_require_a_reply_from_one_agent_and_an_ack_from_everyone() {
         .iter()
         .map(|ask| ask["awaited"].as_str().unwrap())
         .collect();
-    assert_eq!(still_owed, vec!["lead"], "crew's ack must not close lead's reply");
+    assert_eq!(
+        still_owed,
+        vec!["lead"],
+        "crew's ack must not close lead's reply"
+    );
 
     // lead's terminal reply finally clears the asker.
     run(&bus, &["read", "lead", &msg_id]);
@@ -4785,11 +6018,24 @@ fn identity_mint_show_verify_and_fingerprint() {
     run(&bus, &["init"]);
 
     // Mint a fresh identity with capabilities.
-    let new = run(&bus, &["id", "new", "alice", "--capabilities", "plan,code", "--json"]);
+    let new = run(
+        &bus,
+        &[
+            "id",
+            "new",
+            "alice",
+            "--capabilities",
+            "plan,code",
+            "--json",
+        ],
+    );
     let new_json: serde_json::Value = serde_json::from_slice(&new.stdout).unwrap();
     assert_eq!(new_json["ok"], true);
     let pubkey = new_json["pubkey"].as_str().unwrap();
-    assert!(pubkey.starts_with("ed25519:"), "pubkey must be ed25519-prefixed");
+    assert!(
+        pubkey.starts_with("ed25519:"),
+        "pubkey must be ed25519-prefixed"
+    );
     assert_eq!(
         new_json["capabilities"].as_array().unwrap(),
         &vec![serde_json::json!("plan"), serde_json::json!("code")]
@@ -4802,7 +6048,10 @@ fn identity_mint_show_verify_and_fingerprint() {
     let passport: serde_json::Value = serde_json::from_slice(&show.stdout).unwrap();
     assert_eq!(passport["id"], "alice");
     assert_eq!(passport["pubkey"], pubkey);
-    assert!(passport["sig"].as_str().is_some(), "passport must be signed");
+    assert!(
+        passport["sig"].as_str().is_some(),
+        "passport must be signed"
+    );
 
     // verify confirms the self-signature.
     let verify = run(&bus, &["id", "verify", "alice", "--json"]);
@@ -4839,7 +6088,10 @@ fn identity_verify_detects_a_tampered_passport() {
     assert_eq!(verify_json["error"]["verified"], false);
 
     // Verifying an arbitrary passport file works the same way.
-    let file_verify = run_fail(&bus, &["id", "verify", "--file", path.to_str().unwrap(), "--json"]);
+    let file_verify = run_fail(
+        &bus,
+        &["id", "verify", "--file", path.to_str().unwrap(), "--json"],
+    );
     let file_json: serde_json::Value = serde_json::from_slice(&file_verify.stderr).unwrap();
     assert_eq!(file_json["error"]["verified"], false);
 }
@@ -4857,9 +6109,22 @@ fn capability_grant_attenuate_and_verify_end_to_end() {
     run(
         &bus,
         &[
-            "grant", "new", "--issuer", "alice", "--to", "bob",
-            "--action", "task.dispatch,task.result", "--tool", "deploy",
-            "--env", "staging", "--ttl", "1h", "--out", root_token.to_str().unwrap(),
+            "grant",
+            "new",
+            "--issuer",
+            "alice",
+            "--to",
+            "bob",
+            "--action",
+            "task.dispatch,task.result",
+            "--tool",
+            "deploy",
+            "--env",
+            "staging",
+            "--ttl",
+            "1h",
+            "--out",
+            root_token.to_str().unwrap(),
             "--json",
         ],
     );
@@ -4868,9 +6133,19 @@ fn capability_grant_attenuate_and_verify_end_to_end() {
     let ok = run(
         &bus,
         &[
-            "grant", "verify", "--token-file", root_token.to_str().unwrap(),
-            "--root", "alice", "--action", "task.dispatch", "--tool", "deploy",
-            "--env", "staging", "--json",
+            "grant",
+            "verify",
+            "--token-file",
+            root_token.to_str().unwrap(),
+            "--root",
+            "alice",
+            "--action",
+            "task.dispatch",
+            "--tool",
+            "deploy",
+            "--env",
+            "staging",
+            "--json",
         ],
     );
     let ok_json: serde_json::Value = serde_json::from_slice(&ok.stdout).unwrap();
@@ -4880,9 +6155,19 @@ fn capability_grant_attenuate_and_verify_end_to_end() {
     let denied = run_fail(
         &bus,
         &[
-            "grant", "verify", "--token-file", root_token.to_str().unwrap(),
-            "--root", "alice", "--action", "task.dispatch", "--tool", "delete",
-            "--env", "staging", "--json",
+            "grant",
+            "verify",
+            "--token-file",
+            root_token.to_str().unwrap(),
+            "--root",
+            "alice",
+            "--action",
+            "task.dispatch",
+            "--tool",
+            "delete",
+            "--env",
+            "staging",
+            "--json",
         ],
     );
     let denied_json: serde_json::Value = serde_json::from_slice(&denied.stderr).unwrap();
@@ -4893,9 +6178,19 @@ fn capability_grant_attenuate_and_verify_end_to_end() {
     run(
         &bus,
         &[
-            "grant", "attenuate", "--holder", "bob", "--to", "carol",
-            "--token-file", root_token.to_str().unwrap(), "--action", "task.dispatch",
-            "--out", sub_token.to_str().unwrap(), "--json",
+            "grant",
+            "attenuate",
+            "--holder",
+            "bob",
+            "--to",
+            "carol",
+            "--token-file",
+            root_token.to_str().unwrap(),
+            "--action",
+            "task.dispatch",
+            "--out",
+            sub_token.to_str().unwrap(),
+            "--json",
         ],
     );
 
@@ -4903,9 +6198,19 @@ fn capability_grant_attenuate_and_verify_end_to_end() {
     let carol_ok = run(
         &bus,
         &[
-            "grant", "verify", "--token-file", sub_token.to_str().unwrap(),
-            "--root", "alice", "--action", "task.dispatch", "--tool", "deploy",
-            "--env", "staging", "--json",
+            "grant",
+            "verify",
+            "--token-file",
+            sub_token.to_str().unwrap(),
+            "--root",
+            "alice",
+            "--action",
+            "task.dispatch",
+            "--tool",
+            "deploy",
+            "--env",
+            "staging",
+            "--json",
         ],
     );
     let carol_ok_json: serde_json::Value = serde_json::from_slice(&carol_ok.stdout).unwrap();
@@ -4915,19 +6220,39 @@ fn capability_grant_attenuate_and_verify_end_to_end() {
     let carol_denied = run_fail(
         &bus,
         &[
-            "grant", "verify", "--token-file", sub_token.to_str().unwrap(),
-            "--root", "alice", "--action", "task.result", "--json",
+            "grant",
+            "verify",
+            "--token-file",
+            sub_token.to_str().unwrap(),
+            "--root",
+            "alice",
+            "--action",
+            "task.result",
+            "--json",
         ],
     );
-    let carol_denied_json: serde_json::Value = serde_json::from_slice(&carol_denied.stderr).unwrap();
+    let carol_denied_json: serde_json::Value =
+        serde_json::from_slice(&carol_denied.stderr).unwrap();
     assert_eq!(carol_denied_json["error"]["code"], "not_authorized");
 
     // inspect verifies signatures and reports the two-block chain.
-    let inspect = run(&bus, &["grant", "inspect", "--token-file", sub_token.to_str().unwrap(), "--json"]);
+    let inspect = run(
+        &bus,
+        &[
+            "grant",
+            "inspect",
+            "--token-file",
+            sub_token.to_str().unwrap(),
+            "--json",
+        ],
+    );
     let inspect_json: serde_json::Value = serde_json::from_slice(&inspect.stdout).unwrap();
     assert_eq!(inspect_json["signatures_valid"], true);
     assert_eq!(inspect_json["blocks"].as_array().unwrap().len(), 2);
-    assert_eq!(inspect_json["effective"]["action"], serde_json::json!(["task.dispatch"]));
+    assert_eq!(
+        inspect_json["effective"]["action"],
+        serde_json::json!(["task.dispatch"])
+    );
 }
 
 #[test]
@@ -4942,8 +6267,17 @@ fn capability_only_the_holder_can_attenuate_via_cli() {
     run(
         &bus,
         &[
-            "grant", "new", "--issuer", "alice", "--to", "bob",
-            "--action", "task.dispatch", "--out", token.to_str().unwrap(), "--json",
+            "grant",
+            "new",
+            "--issuer",
+            "alice",
+            "--to",
+            "bob",
+            "--action",
+            "task.dispatch",
+            "--out",
+            token.to_str().unwrap(),
+            "--json",
         ],
     );
 
@@ -4951,11 +6285,317 @@ fn capability_only_the_holder_can_attenuate_via_cli() {
     let mallory = run_fail(
         &bus,
         &[
-            "grant", "attenuate", "--holder", "mallory", "--to", "mallory",
-            "--token-file", token.to_str().unwrap(), "--action", "task.dispatch",
-            "--out", bus.join("evil.json").to_str().unwrap(), "--json",
+            "grant",
+            "attenuate",
+            "--holder",
+            "mallory",
+            "--to",
+            "mallory",
+            "--token-file",
+            token.to_str().unwrap(),
+            "--action",
+            "task.dispatch",
+            "--out",
+            bus.join("evil.json").to_str().unwrap(),
+            "--json",
         ],
     );
     let mallory_json: serde_json::Value = serde_json::from_slice(&mallory.stderr).unwrap();
     assert_eq!(mallory_json["ok"], false);
+}
+
+#[test]
+fn task_dispatch_run_and_result_close_the_obligation() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(&bus, &["claim", "alice", "--workspace", "."]);
+    run(&bus, &["claim", "worker", "--workspace", "."]);
+    run(&bus, &["id", "new", "alice", "--json"]);
+    run(&bus, &["id", "new", "worker", "--json"]);
+    run(
+        &bus,
+        &[
+            "conversation",
+            "create",
+            "c",
+            "--participants",
+            "alice,worker",
+            "--starter",
+            "alice",
+        ],
+    );
+
+    // Alice grants worker the right to run the `echo` tool, then dispatches a task.
+    let cap = bus.join("cap.json");
+    run(
+        &bus,
+        &[
+            "grant",
+            "new",
+            "--issuer",
+            "alice",
+            "--to",
+            "worker",
+            "--action",
+            "tool.run",
+            "--tool",
+            "echo",
+            "--ttl",
+            "1h",
+            "--out",
+            cap.to_str().unwrap(),
+            "--json",
+        ],
+    );
+    let dispatch = run(
+        &bus,
+        &[
+            "task",
+            "dispatch",
+            "--from",
+            "alice",
+            "--to",
+            "worker",
+            "--conversation",
+            "c",
+            "--tool",
+            "echo",
+            "--args",
+            r#"{"hi":"there"}"#,
+            "--cap",
+            cap.to_str().unwrap(),
+            "--json",
+        ],
+    );
+    let dispatch_json: serde_json::Value = serde_json::from_slice(&dispatch.stdout).unwrap();
+    let task_id = dispatch_json["task_id"].as_str().unwrap().to_string();
+
+    // The task is an open obligation worker owes alice.
+    let owed = run(&bus, &["awaiting", "worker", "--json"]);
+    let owed_json: serde_json::Value = serde_json::from_slice(&owed.stdout).unwrap();
+    assert_eq!(owed_json["you_owe"].as_array().unwrap().len(), 1);
+
+    // The executor runs the tool (cat echoes the JSON args back), pinned to
+    // alice as the trusted capability root.
+    let executor = run(
+        &bus,
+        &[
+            "run",
+            "worker",
+            "--once",
+            "--tool",
+            "echo=/bin/cat",
+            "--trust",
+            "alice",
+            "--json",
+        ],
+    );
+    let executor_json: serde_json::Value = serde_json::from_slice(&executor.stdout).unwrap();
+    assert_eq!(executor_json["processed"], 1);
+
+    // The task is now done, and the result echoes the dispatched arguments.
+    let status = run(&bus, &["task", "status", &task_id, "--json"]);
+    let status_json: serde_json::Value = serde_json::from_slice(&status.stdout).unwrap();
+    assert_eq!(status_json["workers"][0]["agent"], "worker");
+    assert_eq!(status_json["workers"][0]["status"], "done");
+    assert_eq!(status_json["result"]["ok"], true);
+    assert_eq!(status_json["result"]["result"]["hi"], "there");
+
+    // The obligation is closed on both sides.
+    let after = run(&bus, &["awaiting", "alice", "--json"]);
+    let after_json: serde_json::Value = serde_json::from_slice(&after.stdout).unwrap();
+    assert!(after_json["owed_to_you"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn executor_rejects_a_task_outside_the_capability() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(&bus, &["claim", "alice", "--workspace", "."]);
+    run(&bus, &["claim", "worker", "--workspace", "."]);
+    run(&bus, &["id", "new", "alice", "--json"]);
+    run(&bus, &["id", "new", "worker", "--json"]);
+    run(
+        &bus,
+        &[
+            "conversation",
+            "create",
+            "c",
+            "--participants",
+            "alice,worker",
+            "--starter",
+            "alice",
+        ],
+    );
+
+    // The capability authorizes only `echo`, but the task asks for `deploy`.
+    let cap = bus.join("cap.json");
+    run(
+        &bus,
+        &[
+            "grant",
+            "new",
+            "--issuer",
+            "alice",
+            "--to",
+            "worker",
+            "--action",
+            "tool.run",
+            "--tool",
+            "echo",
+            "--ttl",
+            "1h",
+            "--out",
+            cap.to_str().unwrap(),
+            "--json",
+        ],
+    );
+    let dispatch = run(
+        &bus,
+        &[
+            "task",
+            "dispatch",
+            "--from",
+            "alice",
+            "--to",
+            "worker",
+            "--conversation",
+            "c",
+            "--tool",
+            "deploy",
+            "--args",
+            "{}",
+            "--cap",
+            cap.to_str().unwrap(),
+            "--json",
+        ],
+    );
+    let task_id = serde_json::from_slice::<serde_json::Value>(&dispatch.stdout).unwrap()["task_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // Even with the tool registered, the executor must refuse: the capability
+    // does not authorize `deploy`. The obligation closes as rejected, not done.
+    run(
+        &bus,
+        &[
+            "run",
+            "worker",
+            "--once",
+            "--tool",
+            "deploy=/bin/cat",
+            "--trust",
+            "alice",
+            "--json",
+        ],
+    );
+    let status = run(&bus, &["task", "status", &task_id, "--json"]);
+    let status_json: serde_json::Value = serde_json::from_slice(&status.stdout).unwrap();
+    assert_eq!(status_json["workers"][0]["status"], "rejected");
+    assert_eq!(status_json["result"]["ok"], false);
+    assert!(
+        status_json["result"]["error"]
+            .as_str()
+            .unwrap()
+            .contains("unauthorized"),
+        "rejection reason should explain the capability denial"
+    );
+}
+
+#[test]
+fn executor_records_launch_failures_as_rejected_tasks() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(&bus, &["claim", "alice", "--workspace", "."]);
+    run(&bus, &["claim", "worker", "--workspace", "."]);
+    run(&bus, &["id", "new", "alice", "--json"]);
+    run(&bus, &["id", "new", "worker", "--json"]);
+    run(
+        &bus,
+        &[
+            "conversation",
+            "create",
+            "c",
+            "--participants",
+            "alice,worker",
+            "--starter",
+            "alice",
+        ],
+    );
+
+    let cap = bus.join("cap.json");
+    run(
+        &bus,
+        &[
+            "grant",
+            "new",
+            "--issuer",
+            "alice",
+            "--to",
+            "worker",
+            "--action",
+            "tool.run",
+            "--tool",
+            "echo",
+            "--ttl",
+            "1h",
+            "--out",
+            cap.to_str().unwrap(),
+            "--json",
+        ],
+    );
+    let dispatch = run(
+        &bus,
+        &[
+            "task",
+            "dispatch",
+            "--from",
+            "alice",
+            "--to",
+            "worker",
+            "--conversation",
+            "c",
+            "--tool",
+            "echo",
+            "--args",
+            "{}",
+            "--cap",
+            cap.to_str().unwrap(),
+            "--json",
+        ],
+    );
+    let task_id = serde_json::from_slice::<serde_json::Value>(&dispatch.stdout).unwrap()["task_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let missing_tool = bus.join("missing-tool");
+    let tool_spec = format!("echo={}", missing_tool.display());
+
+    let executor = run(
+        &bus,
+        &[
+            "run",
+            "worker",
+            "--once",
+            "--tool",
+            tool_spec.as_str(),
+            "--trust",
+            "alice",
+            "--json",
+        ],
+    );
+    let executor_json: serde_json::Value = serde_json::from_slice(&executor.stdout).unwrap();
+    assert_eq!(executor_json["processed"], 1);
+
+    let status = run(&bus, &["task", "status", &task_id, "--json"]);
+    let status_json: serde_json::Value = serde_json::from_slice(&status.stdout).unwrap();
+    assert_eq!(status_json["workers"][0]["status"], "rejected");
+    assert_eq!(status_json["result"]["ok"], false);
+    assert!(
+        status_json["result"]["error"]
+            .as_str()
+            .unwrap()
+            .contains("failed to launch tool")
+    );
 }

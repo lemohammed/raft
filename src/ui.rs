@@ -1,8 +1,8 @@
 use crate::cli::UiArgs;
 use crate::error::{RaftError, Result};
 use crate::storage::{
-    DirLock, atomic_write_json, conversation_path, ensure_root, read_json, set_dir_private,
-    sorted_read_dir, target_room,
+    DirLock, atomic_write_json, conversation_path, ensure_root, is_agent_record_file, read_json,
+    set_dir_private, sorted_read_dir, target_room,
 };
 use crate::types::{
     Agent, HttpRequest, Message, Meta, Rate, SendMessageInput, UiAgent, UiChannelRequest,
@@ -156,8 +156,8 @@ fn read_http_request(stream: &mut TcpStream) -> Result<HttpRequest> {
             body: Vec::new(),
         });
     }
-    let header_end =
-        http_header_end(&bytes).ok_or_else(|| RaftError::new("invalid HTTP request".to_string()))?;
+    let header_end = http_header_end(&bytes)
+        .ok_or_else(|| RaftError::new("invalid HTTP request".to_string()))?;
     let header_text = String::from_utf8_lossy(&bytes[..header_end]);
     let mut lines = header_text.lines();
     let request_line = lines
@@ -468,8 +468,8 @@ fn validate_ui_request_security(
     bind_host: &str,
     bind_port: u16,
 ) -> Result<()> {
-    let host =
-        http_header(request, "host").ok_or_else(|| RaftError::new("missing Host header".to_string()))?;
+    let host = http_header(request, "host")
+        .ok_or_else(|| RaftError::new("missing Host header".to_string()))?;
     let allowed_hosts = ui_allowed_hosts(bind_host, bind_port);
     if !allowed_hosts
         .iter()
@@ -529,7 +529,7 @@ fn ui_allowed_origins(hosts: &[String]) -> Vec<String> {
 fn build_ui_snapshot(root: &Path, agent_id: &str, limit: usize) -> Result<UiSnapshot> {
     let mut agents = Vec::new();
     for entry in sorted_read_dir(&root.join("agents"))? {
-        if entry.path().extension() != Some(OsStr::new("json")) {
+        if !is_agent_record_file(&entry.path()) {
             continue;
         }
         let Some(agent): Option<Agent> = read_json(&entry.path())? else {
@@ -560,7 +560,9 @@ fn build_ui_snapshot(root: &Path, agent_id: &str, limit: usize) -> Result<UiSnap
     let asks = gather_open_asks(root, None, Some(agent_id))?;
     let mut open_asks_by_conv: BTreeMap<String, usize> = BTreeMap::new();
     for ask in &asks {
-        *open_asks_by_conv.entry(ask.conversation_id.clone()).or_default() += 1;
+        *open_asks_by_conv
+            .entry(ask.conversation_id.clone())
+            .or_default() += 1;
     }
 
     let mut conversations = Vec::new();

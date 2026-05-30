@@ -6,6 +6,7 @@ mod crypto;
 mod doctor;
 mod identity;
 mod storage;
+mod task;
 mod types;
 mod ui;
 mod ui_html;
@@ -136,6 +137,12 @@ fn command_wants_json(command: &Commands) -> bool {
             GrantCommand::Verify(args) => args.json,
             GrantCommand::Inspect(args) => args.json,
         },
+        Commands::Task { command } => match command {
+            TaskCommand::Dispatch(args) => args.json,
+            TaskCommand::Status(args) => args.json,
+            TaskCommand::Cancel(args) => args.json,
+        },
+        Commands::Run(args) => args.json,
         _ => false,
     }
 }
@@ -195,6 +202,12 @@ fn run(root: PathBuf, command: Commands) -> Result<()> {
             GrantCommand::Verify(args) => cmd_grant_verify(&root, args),
             GrantCommand::Inspect(args) => cmd_grant_inspect(&root, args),
         },
+        Commands::Task { command } => match command {
+            TaskCommand::Dispatch(args) => cmd_task_dispatch(&root, args),
+            TaskCommand::Status(args) => cmd_task_status(&root, args),
+            TaskCommand::Cancel(args) => cmd_task_cancel(&root, args),
+        },
+        Commands::Run(args) => cmd_run(&root, args),
     }
 }
 
@@ -304,7 +317,10 @@ fn cmd_grant_attenuate(root: &Path, args: GrantAttenuateArgs) -> Result<()> {
         )
     })?;
     let token: capability::Token = read_json(&args.token_file)?.ok_or_else(|| {
-        RaftError::coded("not_found", format!("no such token file: {}", args.token_file.display()))
+        RaftError::coded(
+            "not_found",
+            format!("no such token file: {}", args.token_file.display()),
+        )
     })?;
     let new_holder = resolve_pubkey(root, &args.to)?;
     let caveats = build_caveats(&args.caveats)?;
@@ -314,7 +330,10 @@ fn cmd_grant_attenuate(root: &Path, args: GrantAttenuateArgs) -> Result<()> {
 
 fn cmd_grant_verify(root: &Path, args: GrantVerifyArgs) -> Result<()> {
     let token: capability::Token = read_json(&args.token_file)?.ok_or_else(|| {
-        RaftError::coded("not_found", format!("no such token file: {}", args.token_file.display()))
+        RaftError::coded(
+            "not_found",
+            format!("no such token file: {}", args.token_file.display()),
+        )
     })?;
     let expected_root = match &args.root {
         Some(value) => {
@@ -345,9 +364,433 @@ fn cmd_grant_verify(root: &Path, args: GrantVerifyArgs) -> Result<()> {
     Ok(())
 }
 
+/// `raft task dispatch` — delegate a Hermes tool call to a worker as a
+/// capability-gated task ask. The obligation engine tracks it; the worker's
+/// executor (`raft run`) authorizes and runs it.
+fn cmd_task_dispatch(root: &Path, args: TaskDispatchArgs) -> Result<()> {
+    let from = validate_id(&args.from, "agent id")?;
+    let worker = validate_id(&args.to, "agent id")?;
+    let conversation_id = target_room(args.conversation.as_deref(), args.channel.as_deref())?;
+    ensure_root(root)?;
+    let arguments: serde_json::Value = serde_json::from_str(&args.args)
+        .map_err(|err| RaftError::coded("parse", format!("--args must be JSON: {err}")))?;
+    // If a capability is attached, fail fast on a malformed/forged token; the
+    // worker's executor performs the full contextual authorization.
+    let capability = match &args.cap {
+        Some(path) => {
+            let token: capability::Token = read_json(path)?.ok_or_else(|| {
+                RaftError::coded(
+                    "not_found",
+                    format!("no such capability file: {}", path.display()),
+                )
+            })?;
+            capability::verify_chain(&token, None)?;
+            Some(token)
+        }
+        None => None,
+    };
+    let body = task::TaskBody {
+        tool_call: task::ToolCall {
+            name: args.tool.clone(),
+            arguments,
+        },
+        capability,
+        limits: task::TaskLimits {
+            max_runtime_s: args.max_runtime_s,
+            max_output_bytes: args.max_output_bytes,
+        },
+    };
+    let message = send_message(
+        root,
+        SendMessageInput {
+            conversation_id,
+            sender: from,
+            to: worker.clone(),
+            subject: format!("task: {}", args.tool),
+            body: body.to_body_string()?,
+            kind: "task".to_string(),
+            after: None,
+            subject_id: None,
+            requires_ack: false,
+            needs_response_from: worker.clone(),
+        },
+    )?;
+    if args.json {
+        emit_ok(serde_json::json!({
+            "task_id": message.id,
+            "conversation_id": message.conversation_id,
+            "to": worker,
+            "tool": args.tool,
+        }))?;
+    } else {
+        println!(
+            "dispatched task {} to @{worker} (tool {})",
+            message.id, args.tool
+        );
+    }
+    Ok(())
+}
+
+/// `raft task status` — the task's worker receipt lifecycle plus its result.
+fn cmd_task_status(root: &Path, args: TaskStatusArgs) -> Result<()> {
+    ensure_root(root)?;
+    let task_id = validate_id(&args.task, "message id")?;
+    let (_, message) = find_message(root, &task_id)?;
+    if message.kind != "task" {
+        bail_code!("not_found", "message {task_id:?} is not a task");
+    }
+    let receipts = load_message_receipts(root, &message)?;
+    let workers: Vec<serde_json::Value> = message
+        .needs_response_from
+        .iter()
+        .map(|worker| {
+            let status = receipts
+                .get(worker)
+                .map(|receipt| receipt.status.clone())
+                .unwrap_or_else(|| "pending".to_string());
+            serde_json::json!({ "agent": worker, "status": status })
+        })
+        .collect();
+    let tool = task::TaskBody::parse(&message.body)
+        .ok()
+        .map(|body| body.tool_call.name);
+    let result = find_task_result(root, &message)?;
+    if args.json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "task_id": task_id,
+                "tool": tool,
+                "from": message.from,
+                "workers": workers,
+                "result": result,
+            }))?
+        );
+    } else {
+        println!(
+            "task {task_id} (tool {}) from @{}",
+            tool.as_deref().unwrap_or("?"),
+            message.from
+        );
+        for worker in &workers {
+            println!(
+                "  @{} -> {}",
+                worker["agent"].as_str().unwrap_or("?"),
+                worker["status"]
+            );
+        }
+        match result {
+            Some(result) => println!("  result: {}", serde_json::to_string(&result)?),
+            None => println!("  result: (pending)"),
+        }
+    }
+    Ok(())
+}
+
+/// `raft task cancel` — withdraw a dispatched task (releases the obligation and
+/// notifies the worker to stop).
+fn cmd_task_cancel(root: &Path, args: TaskCancelArgs) -> Result<()> {
+    cmd_withdraw(
+        root,
+        WithdrawArgs {
+            from: args.from,
+            message_id: args.task,
+            reason: args.reason,
+            json: args.json,
+        },
+    )
+}
+
+/// Find the result reply for a task: a message in the same conversation that
+/// follows the task and was authored by one of its workers.
+fn find_task_result(root: &Path, task: &Message) -> Result<Option<task::TaskResult>> {
+    let conv = conversation_path(root, &task.conversation_id)?;
+    for entry in sorted_read_dir(&conv.join("messages"))? {
+        if entry.path().extension() != Some(OsStr::new("json")) {
+            continue;
+        }
+        let Some(message): Option<Message> = read_json(&entry.path())? else {
+            continue;
+        };
+        if message.after.as_deref() == Some(task.id.as_str())
+            && task.needs_response_from.contains(&message.from)
+            && let Ok(result) = serde_json::from_str::<task::TaskResult>(&message.body)
+        {
+            return Ok(Some(result));
+        }
+    }
+    Ok(None)
+}
+
+/// `raft run` — the executor loop. Claims this worker's authorized task asks and
+/// runs their tools in the sandbox, returning a result reply and closing the
+/// obligation with a terminal receipt.
+fn cmd_run(root: &Path, args: RunArgs) -> Result<()> {
+    let worker = validate_id(&args.agent, "agent id")?;
+    ensure_root(root)?;
+    let mut tools: BTreeMap<String, PathBuf> = BTreeMap::new();
+    for spec in &args.tool {
+        let (name, path) = spec.split_once('=').ok_or_else(|| {
+            RaftError::new(format!("invalid --tool {spec:?}; use name=/path/to/exe"))
+        })?;
+        tools.insert(name.to_string(), PathBuf::from(path));
+    }
+    let trusted_root = match &args.trust {
+        Some(value) => Some(resolve_pubkey(root, value)?),
+        None => None,
+    };
+    let worker_pubkey = identity::load_passport(root, &worker)?.map(|passport| passport.pubkey);
+
+    let interval = Duration::from_secs_f64(args.interval.max(0.05));
+    let mut total = 0usize;
+    loop {
+        total += run_pending_tasks(
+            root,
+            &worker,
+            &tools,
+            trusted_root.as_deref(),
+            worker_pubkey.as_deref(),
+        )?;
+        if args.once {
+            break;
+        }
+        thread::sleep(interval);
+    }
+    if args.json {
+        emit_ok(serde_json::json!({ "agent": worker, "processed": total }))?;
+    } else {
+        println!("executor processed {total} task(s)");
+    }
+    Ok(())
+}
+
+/// Process every task currently owed by `worker`. Returns how many were handled.
+fn run_pending_tasks(
+    root: &Path,
+    worker: &str,
+    tools: &BTreeMap<String, PathBuf>,
+    trusted_root: Option<&str>,
+    worker_pubkey: Option<&str>,
+) -> Result<usize> {
+    let asks = gather_open_asks(root, None, Some(worker))?;
+    let mut processed = 0;
+    for ask in asks {
+        if ask.awaited != worker {
+            continue;
+        }
+        let (_, message) = find_message(root, &ask.message_id)?;
+        if message.kind != "task" {
+            continue;
+        }
+        let body = match task::TaskBody::parse(&message.body) {
+            Ok(body) => body,
+            Err(err) => {
+                record_task_outcome(
+                    root,
+                    worker,
+                    &message,
+                    false,
+                    None,
+                    Some(err.message),
+                    None,
+                    false,
+                )?;
+                processed += 1;
+                continue;
+            }
+        };
+        // Authorization. A capability-bearing task is fully authorized against
+        // the worker's runtime context; the worker must be the token's holder.
+        if let Some(token) = &body.capability {
+            if let Some(expected) = worker_pubkey
+                && token.blocks.last().map(|block| block.holder.as_str()) != Some(expected)
+            {
+                record_task_outcome(
+                    root,
+                    worker,
+                    &message,
+                    false,
+                    None,
+                    Some("capability holder is not this worker".to_string()),
+                    None,
+                    false,
+                )?;
+                processed += 1;
+                continue;
+            }
+            let request = capability::AuthRequest {
+                action: "tool.run",
+                conversation: Some(&message.conversation_id),
+                tool: Some(&body.tool_call.name),
+                env: None,
+                now: Utc::now(),
+                requested_runtime_s: body.limits.max_runtime_s,
+                requested_output_bytes: body.limits.max_output_bytes,
+            };
+            if let Err(err) = capability::authorize(token, trusted_root, &request) {
+                record_task_outcome(
+                    root,
+                    worker,
+                    &message,
+                    false,
+                    None,
+                    Some(format!("unauthorized: {}", err.message)),
+                    None,
+                    false,
+                )?;
+                processed += 1;
+                continue;
+            }
+        } else if trusted_root.is_some() {
+            // A pinned trust root means an unsigned task is not runnable.
+            record_task_outcome(
+                root,
+                worker,
+                &message,
+                false,
+                None,
+                Some("task carries no capability but a trusted root is required".to_string()),
+                None,
+                false,
+            )?;
+            processed += 1;
+            continue;
+        }
+        let Some(executable) = tools.get(&body.tool_call.name) else {
+            record_task_outcome(
+                root,
+                worker,
+                &message,
+                false,
+                None,
+                Some(format!("unknown tool {:?}", body.tool_call.name)),
+                None,
+                false,
+            )?;
+            processed += 1;
+            continue;
+        };
+        let timeout = Duration::from_secs(body.limits.max_runtime_s.unwrap_or(30));
+        let max_output = body.limits.max_output_bytes.unwrap_or(1_048_576) as usize;
+        let scratch = root.join("run").join("sandbox").join(&message.id);
+        let outcome = match task::run_tool(
+            executable,
+            &body.tool_call.arguments,
+            &scratch,
+            timeout,
+            max_output,
+        ) {
+            Ok(outcome) => outcome,
+            Err(err) => {
+                let _ = fs::remove_dir_all(&scratch);
+                record_task_outcome(
+                    root,
+                    worker,
+                    &message,
+                    false,
+                    None,
+                    Some(err.message),
+                    None,
+                    false,
+                )?;
+                processed += 1;
+                continue;
+            }
+        };
+        let _ = fs::remove_dir_all(&scratch);
+
+        let (ok, error) = if outcome.timed_out {
+            (
+                false,
+                Some(format!("tool timed out after {}s", timeout.as_secs())),
+            )
+        } else if outcome.exit_code == Some(0) {
+            (true, None)
+        } else {
+            (
+                false,
+                Some(format!(
+                    "tool exited with code {}: {}",
+                    outcome
+                        .exit_code
+                        .map(|c| c.to_string())
+                        .unwrap_or_else(|| "killed".into()),
+                    outcome.stderr.trim()
+                )),
+            )
+        };
+        let result_value = if ok {
+            let trimmed = outcome.stdout.trim();
+            Some(
+                serde_json::from_str::<serde_json::Value>(trimmed)
+                    .unwrap_or_else(|_| serde_json::Value::String(outcome.stdout.clone())),
+            )
+        } else {
+            None
+        };
+        record_task_outcome(
+            root,
+            worker,
+            &message,
+            ok,
+            result_value,
+            error,
+            outcome.exit_code,
+            outcome.truncated,
+        )?;
+        processed += 1;
+    }
+    Ok(processed)
+}
+
+/// Deliver a task's result as a reply and close the obligation with a terminal
+/// receipt (`done` on success, `rejected` otherwise).
+#[allow(clippy::too_many_arguments)]
+fn record_task_outcome(
+    root: &Path,
+    worker: &str,
+    task: &Message,
+    ok: bool,
+    result: Option<serde_json::Value>,
+    error: Option<String>,
+    exit_code: Option<i32>,
+    truncated: bool,
+) -> Result<()> {
+    let status = if ok { "done" } else { "rejected" };
+    let result_body = task::TaskResult {
+        ok,
+        result,
+        error: error.clone(),
+        exit_code,
+        output_truncated: truncated,
+    }
+    .to_body_string()?;
+    send_message(
+        root,
+        SendMessageInput {
+            conversation_id: task.conversation_id.clone(),
+            sender: worker.to_string(),
+            to: task.from.clone(),
+            subject: format!("result: {}", task.subject),
+            body: result_body,
+            kind: "message".to_string(),
+            after: Some(task.id.clone()),
+            subject_id: None,
+            requires_ack: false,
+            needs_response_from: String::new(),
+        },
+    )?;
+    let note = error.or_else(|| Some("ok".to_string()));
+    write_receipt(root, worker, task, status, note)?;
+    Ok(())
+}
+
 fn cmd_grant_inspect(_root: &Path, args: GrantInspectArgs) -> Result<()> {
     let token: capability::Token = read_json(&args.token_file)?.ok_or_else(|| {
-        RaftError::coded("not_found", format!("no such token file: {}", args.token_file.display()))
+        RaftError::coded(
+            "not_found",
+            format!("no such token file: {}", args.token_file.display()),
+        )
     })?;
     let effective = capability::verify_chain(&token, None)?;
     let effective_json = capability::effective_to_json(&effective);
@@ -415,7 +858,10 @@ fn cmd_id_show(root: &Path, args: IdShowArgs) -> Result<()> {
     let agent_id = validate_id(&args.agent, "agent id")?;
     ensure_root(root)?;
     let passport = identity::load_passport(root, &agent_id)?.ok_or_else(|| {
-        RaftError::coded("not_found", format!("no identity for {agent_id:?}; run `raft id new`"))
+        RaftError::coded(
+            "not_found",
+            format!("no identity for {agent_id:?}; run `raft id new`"),
+        )
     })?;
     if args.json {
         println!("{}", serde_json::to_string_pretty(&passport)?);
@@ -455,8 +901,9 @@ fn cmd_id_verify(root: &Path, args: IdVerifyArgs) -> Result<()> {
                 )
             })?
         }
-        (None, Some(path)) => read_json::<identity::Passport>(path)?
-            .ok_or_else(|| RaftError::coded("not_found", format!("no such file: {}", path.display())))?,
+        (None, Some(path)) => read_json::<identity::Passport>(path)?.ok_or_else(|| {
+            RaftError::coded("not_found", format!("no such file: {}", path.display()))
+        })?,
     };
     let result = passport.verify();
     if args.json {
@@ -468,14 +915,16 @@ fn cmd_id_verify(root: &Path, args: IdVerifyArgs) -> Result<()> {
                 "verified": true,
             }))?,
             Err(err) => {
-                return Err(RaftError::coded("error", err.message.clone()).with_details(
-                    serde_json::json!({ "id": passport.id, "verified": false }),
-                ));
+                return Err(RaftError::coded("error", err.message.clone())
+                    .with_details(serde_json::json!({ "id": passport.id, "verified": false })));
             }
         }
     } else {
         match &result {
-            Ok(()) => println!("ok: @{} passport verifies ({})", passport.id, passport.pubkey),
+            Ok(()) => println!(
+                "ok: @{} passport verifies ({})",
+                passport.id, passport.pubkey
+            ),
             Err(err) => return Err(RaftError::coded("error", err.message.clone())),
         }
     }
@@ -487,7 +936,10 @@ fn cmd_id_fingerprint(root: &Path, args: IdFingerprintArgs) -> Result<()> {
     let agent_id = validate_id(&args.agent, "agent id")?;
     ensure_root(root)?;
     let passport = identity::load_passport(root, &agent_id)?.ok_or_else(|| {
-        RaftError::coded("not_found", format!("no identity for {agent_id:?}; run `raft id new`"))
+        RaftError::coded(
+            "not_found",
+            format!("no identity for {agent_id:?}; run `raft id new`"),
+        )
     })?;
     let fingerprint = fingerprint(&passport.pubkey);
     if args.json {
@@ -636,8 +1088,8 @@ fn cmd_register(root: &Path, args: RegisterArgs) -> Result<()> {
         LOCK_TTL_SECONDS,
         LOCK_TIMEOUT_SECONDS,
     )?;
-    let previous: Agent = read_json(&agent_path(root, &agent_id))?
-        .ok_or_else(|| not_claimed(root, &agent_id))?;
+    let previous: Agent =
+        read_json(&agent_path(root, &agent_id))?.ok_or_else(|| not_claimed(root, &agent_id))?;
     let workspace = args
         .workspace
         .map(|path| resolve_path(&path))
@@ -709,8 +1161,8 @@ fn heartbeat_once(
         LOCK_TTL_SECONDS,
         LOCK_TIMEOUT_SECONDS,
     )?;
-    let previous: Agent = read_json(&agent_path(root, agent_id))?
-        .ok_or_else(|| not_claimed(root, &agent_id))?;
+    let previous: Agent =
+        read_json(&agent_path(root, agent_id))?.ok_or_else(|| not_claimed(root, &agent_id))?;
     let ttl = ttl_override.unwrap_or(previous.ttl_seconds);
     let payload = Agent {
         v: SCHEMA_VERSION,
@@ -740,8 +1192,8 @@ fn cmd_heartbeat_watch(
     ttl_override: Option<u64>,
     interval_override: Option<f64>,
 ) -> Result<()> {
-    let previous: Agent = read_json(&agent_path(root, agent_id))?
-        .ok_or_else(|| not_claimed(root, &agent_id))?;
+    let previous: Agent =
+        read_json(&agent_path(root, agent_id))?.ok_or_else(|| not_claimed(root, &agent_id))?;
     let ttl = ttl_override.unwrap_or(previous.ttl_seconds);
     let interval = interval_override.unwrap_or_else(|| (ttl as f64 / 2.0).max(1.0));
     if !interval.is_finite() || interval <= 0.0 {
@@ -813,8 +1265,8 @@ fn cmd_state_set(root: &Path, args: StateSetArgs) -> Result<()> {
         LOCK_TTL_SECONDS,
         LOCK_TIMEOUT_SECONDS,
     )?;
-    let previous: Agent = read_json(&agent_path(root, &agent_id))?
-        .ok_or_else(|| not_claimed(root, &agent_id))?;
+    let previous: Agent =
+        read_json(&agent_path(root, &agent_id))?.ok_or_else(|| not_claimed(root, &agent_id))?;
     let changed = previous.current_state != state || previous.state_note != args.note;
     let now = iso_now();
     let payload = Agent {
@@ -852,8 +1304,8 @@ fn cmd_state_set(root: &Path, args: StateSetArgs) -> Result<()> {
 fn cmd_state_get(root: &Path, args: StateGetArgs) -> Result<()> {
     let agent_id = validate_id(&args.agent, "agent id")?;
     ensure_root(root)?;
-    let agent: Agent = read_json(&agent_path(root, &agent_id))?
-        .ok_or_else(|| not_claimed(root, &agent_id))?;
+    let agent: Agent =
+        read_json(&agent_path(root, &agent_id))?.ok_or_else(|| not_claimed(root, &agent_id))?;
     // A crashed or exited agent leaves its last `current_state` on disk
     // unchanged, so a bare `state get` would report e.g. `working` as if it
     // were authoritative. Join the same liveness signal `roster`/`me` use
@@ -1162,7 +1614,10 @@ fn cmd_conversation_create(root: &Path, args: ConversationCreateArgs) -> Result<
             }
             return Ok(());
         }
-        bail_code!("conflict", "conversation {conversation_id:?} already exists");
+        bail_code!(
+            "conflict",
+            "conversation {conversation_id:?} already exists"
+        );
     }
     fs::create_dir_all(conv.join("messages"))?;
     fs::create_dir_all(conv.join("receipts"))?;
@@ -1321,7 +1776,11 @@ fn remove_participant(
     agent: &str,
     want_channel: bool,
 ) -> Result<ParticipantRemoval> {
-    let noun = if want_channel { "channel" } else { "conversation" };
+    let noun = if want_channel {
+        "channel"
+    } else {
+        "conversation"
+    };
     let conversation_id = validate_id(id, "conversation id")?;
     let agent_id = validate_id(agent, "agent id")?;
     ensure_root(root)?;
@@ -1352,14 +1811,23 @@ fn remove_participant(
         meta.updated_at = iso_now();
         atomic_write_json(&conv.join("meta.json"), &meta)?;
         let (verb, subject) = if want_channel {
-            (format!("@{agent_id} left channel {conversation_id}."), "channel left")
+            (
+                format!("@{agent_id} left channel {conversation_id}."),
+                "channel left",
+            )
         } else {
             (
                 format!("@{agent_id} removed from conversation {conversation_id}."),
                 "participant removed",
             )
         };
-        write_system_message(&conv, &conversation_id, meta.participants.clone(), verb, subject)?;
+        write_system_message(
+            &conv,
+            &conversation_id,
+            meta.participants.clone(),
+            verb,
+            subject,
+        )?;
         true
     } else {
         false
@@ -1405,7 +1873,10 @@ fn cmd_channel_leave(root: &Path, args: ChannelLeaveArgs) -> Result<()> {
             "members": result.participants,
         }))?;
     } else if result.removed {
-        println!("@{} left channel {}", result.agent_id, result.conversation_id);
+        println!(
+            "@{} left channel {}",
+            result.agent_id, result.conversation_id
+        );
     } else {
         println!(
             "@{} is not subscribed to channel {}",
@@ -1461,11 +1932,7 @@ fn cmd_reply(root: &Path, args: ReplyArgs) -> Result<()> {
     let sender = validate_id(&args.sender, "sender")?;
     // Validate the optional ack status up front so a bad status fails before we
     // send the reply, rather than leaving a sent reply with no receipt.
-    let ack_status = args
-        .ack
-        .as_deref()
-        .map(validate_ack_status)
-        .transpose()?;
+    let ack_status = args.ack.as_deref().map(validate_ack_status).transpose()?;
     // A bare reply (no --to) answers only the parent's sender. In a group or
     // channel thread that silently drops everyone else who was on the parent, so
     // we surface the omitted participants below — but only when the audience was
@@ -1501,7 +1968,13 @@ fn cmd_reply(root: &Path, args: ReplyArgs) -> Result<()> {
     // Report the effective stored status: the downgrade guard may preserve a
     // stronger existing receipt (e.g. `reply --ack working` after `done`).
     let effective_ack = match &ack_status {
-        Some(status) => Some(write_receipt(root, &sender, &parent, status, args.ack_note)?),
+        Some(status) => Some(write_receipt(
+            root,
+            &sender,
+            &parent,
+            status,
+            args.ack_note,
+        )?),
         None => None,
     };
     let offline = offline_recipients(root, &message)?;
@@ -1540,7 +2013,11 @@ fn cmd_reply(root: &Path, args: ReplyArgs) -> Result<()> {
 /// recipients silently fall out; this names them so the agent can re-address
 /// with `--to` if it meant to answer the whole thread. Both `*` audiences expand
 /// to the conversation's participants before the diff.
-fn omitted_thread_participants(root: &Path, parent: &Message, reply: &Message) -> Result<Vec<String>> {
+fn omitted_thread_participants(
+    root: &Path,
+    parent: &Message,
+    reply: &Message,
+) -> Result<Vec<String>> {
     let (_, meta) = load_conversation(root, &parent.conversation_id)?;
     let expand = |recipients: &[String]| -> BTreeSet<String> {
         let mut set = BTreeSet::new();
@@ -1560,7 +2037,10 @@ fn omitted_thread_participants(root: &Path, parent: &Message, reply: &Message) -
     Ok(parent_audience
         .into_iter()
         .filter(|id| {
-            id != &reply.from && id != "*" && !reached.contains(id) && meta.participants.contains(id)
+            id != &reply.from
+                && id != "*"
+                && !reached.contains(id)
+                && meta.participants.contains(id)
         })
         .collect())
 }
@@ -1744,20 +2224,24 @@ pub(crate) fn send_message_locked(root: &Path, input: SendMessageInput) -> Resul
     let needs_response_from = unique(split_recipients(&input.needs_response_from)?);
     for awaited in &needs_response_from {
         ensure_participant(&meta, awaited)?;
-        if !recipients.iter().any(|recipient| recipient == awaited || recipient == "*") {
+        if !recipients
+            .iter()
+            .any(|recipient| recipient == awaited || recipient == "*")
+        {
             recipients.push(awaited.clone());
         }
     }
     recipients = unique(recipients);
     let kind = normalize_send_kind(&input.kind)?;
-    // Obligation flags belong only to `message`. An `event` (e.g. an IM bridge
-    // relaying a human) is not asking a peer for a reply, and a bridge agent
-    // rarely runs `ack`, so honoring these on a non-message would fabricate a
-    // permanently-open ask that misreports who owes/awaits work. Reject loudly
-    // rather than silently strip, so a misusing caller learns its mistake.
-    if kind != "message" && (input.requires_ack || !needs_response_from.is_empty()) {
+    // Obligation flags belong only to obligation-bearing kinds (`message`,
+    // `task`). An `event` (e.g. an IM bridge relaying a human) is not asking a
+    // peer for a reply, and a bridge agent rarely runs `ack`, so honoring these
+    // on a non-obligation kind would fabricate a permanently-open ask that
+    // misreports who owes/awaits work. Reject loudly rather than silently strip,
+    // so a misusing caller learns its mistake.
+    if !is_obligation_kind(&kind) && (input.requires_ack || !needs_response_from.is_empty()) {
         bail!(
-            "--requires-ack and --needs-response-from are only valid on kind \"message\", not {kind:?}"
+            "--requires-ack and --needs-response-from are only valid on kind \"message\" or \"task\", not {kind:?}"
         );
     }
     let subject_id = input
@@ -1797,7 +2281,6 @@ pub(crate) fn send_message_locked(root: &Path, input: SendMessageInput) -> Resul
     Ok(message)
 }
 
-
 fn ask_is_terminal(status: &str) -> bool {
     TERMINAL_ACK_STATUSES.contains(&status)
 }
@@ -1833,13 +2316,15 @@ fn predates_membership(meta: &Meta, message: &Message, agent_id: &str) -> bool {
 }
 
 fn message_awaited(message: &Message, meta: &Meta) -> Vec<String> {
-    // Only `message` carries obligation semantics (protocol.md: "Only this kind
-    // may use --needs-response-from"). `event`/`receipt`/`system` never open an
-    // ask, so neutralize them here — the single chokepoint every ask-accounting
-    // path (gather_open_asks, build_view, cmd_read, watch, gc archive) flows
-    // through — which also disarms any legacy non-message rows already on disk
-    // that were written with these flags before send-time rejected them.
-    if message.kind != "message" || message.withdrawn.is_some() {
+    // Only obligation-bearing kinds (`message`, `task`) carry obligation
+    // semantics (protocol.md: "Only this kind may use --needs-response-from").
+    // `event`/`receipt`/`system` never open an ask, so neutralize them here — the
+    // single chokepoint every ask-accounting path (gather_open_asks, build_view,
+    // cmd_read, watch, gc archive) flows through — which also disarms any legacy
+    // non-obligation rows already on disk written with these flags before
+    // send-time rejected them. A `task` is a delegated unit of work whose
+    // receipt lifecycle (working → done/rejected) is exactly an ask's lifecycle.
+    if !is_obligation_kind(&message.kind) || message.withdrawn.is_some() {
         return Vec::new();
     }
     // The two obligation sources are independent and may both be set: every
@@ -1877,7 +2362,7 @@ pub(crate) fn live_agent_ids(root: &Path) -> Result<BTreeSet<String>> {
     let now = Utc::now();
     let mut live = BTreeSet::new();
     for entry in sorted_read_dir(&root.join("agents"))? {
-        if entry.path().extension() != Some(OsStr::new("json")) {
+        if !is_agent_record_file(&entry.path()) {
             continue;
         }
         let Some(agent): Option<Agent> = read_json(&entry.path())? else {
@@ -2077,7 +2562,7 @@ fn cmd_me(root: &Path, args: MeArgs) -> Result<()> {
         .unwrap_or(false);
     let mut live_peers = Vec::new();
     for entry in sorted_read_dir(&root.join("agents"))? {
-        if entry.path().extension() != Some(OsStr::new("json")) {
+        if !is_agent_record_file(&entry.path()) {
             continue;
         }
         let Some(peer): Option<Agent> = read_json(&entry.path())? else {
@@ -2230,7 +2715,7 @@ fn cmd_roster(root: &Path, args: RosterArgs) -> Result<()> {
     }
     let mut entries = Vec::new();
     for entry in sorted_read_dir(&root.join("agents"))? {
-        if entry.path().extension() != Some(OsStr::new("json")) {
+        if !is_agent_record_file(&entry.path()) {
             continue;
         }
         let Some(agent): Option<Agent> = read_json(&entry.path())? else {
@@ -2408,7 +2893,11 @@ fn cmd_wait(root: &Path, args: WaitArgs) -> Result<()> {
         }
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
-            bail_code!("timeout", "no unread message arrived within {}s", args.timeout);
+            bail_code!(
+                "timeout",
+                "no unread message arrived within {}s",
+                args.timeout
+            );
         }
         waker.wait(interval.min(remaining));
     }
@@ -2661,8 +3150,8 @@ fn cmd_watch(root: &Path, args: WatchArgs) -> Result<()> {
                 continue;
             }
             let is_state_change = is_state_change_message(&message);
-            let should_emit =
-                message_is_unread(root, &message, &agent_id) || args.state_changes && is_state_change;
+            let should_emit = message_is_unread(root, &message, &agent_id)
+                || args.state_changes && is_state_change;
             if !should_emit {
                 continue;
             }
@@ -2778,7 +3267,11 @@ fn cmd_search(root: &Path, args: SearchArgs) -> Result<()> {
         Some(pattern) => Some(pattern.to_lowercase()),
         None => None,
     };
-    let from = args.from.as_deref().map(|v| validate_id(v, "from")).transpose()?;
+    let from = args
+        .from
+        .as_deref()
+        .map(|v| validate_id(v, "from"))
+        .transpose()?;
     let kind = args.kind.as_deref().map(str::to_string);
     let mentions = args
         .mentions
@@ -2903,9 +3396,7 @@ fn cmd_thread(root: &Path, args: ThreadArgs) -> Result<()> {
     } else {
         print_thread_node(&tree, 0);
         if omitted > 0 {
-            println!(
-                "\n... {omitted} earlier message(s) omitted; raise --limit to see them"
-            );
+            println!("\n... {omitted} earlier message(s) omitted; raise --limit to see them");
         }
     }
     Ok(())
@@ -3137,7 +3628,7 @@ fn cmd_status(root: &Path, args: StatusArgs) -> Result<()> {
         .transpose()?;
     let mut agents = Vec::new();
     for entry in sorted_read_dir(&root.join("agents"))? {
-        if entry.path().extension() != Some(OsStr::new("json")) {
+        if !is_agent_record_file(&entry.path()) {
             continue;
         }
         let agent: Agent = read_json(&entry.path())?.ok_or_else(|| {
@@ -3171,7 +3662,9 @@ fn cmd_status(root: &Path, args: StatusArgs) -> Result<()> {
     let asks = gather_open_asks(root, None, scoped_agent.as_deref())?;
     let mut open_asks_by_conv: BTreeMap<String, usize> = BTreeMap::new();
     for ask in &asks {
-        *open_asks_by_conv.entry(ask.conversation_id.clone()).or_default() += 1;
+        *open_asks_by_conv
+            .entry(ask.conversation_id.clone())
+            .or_default() += 1;
     }
 
     let mut conversations = Vec::new();
@@ -3343,7 +3836,6 @@ fn cmd_serve(root: &Path, args: ServeArgs) -> Result<()> {
     }
 }
 
-
 /// Ids of every conversation/channel on the bus (those with a `meta.json`).
 fn conversation_ids(root: &Path) -> Vec<String> {
     let Ok(entries) = sorted_read_dir(&root.join("conversations")) else {
@@ -3386,7 +3878,7 @@ fn agent_ids(root: &Path) -> Vec<String> {
         .into_iter()
         .filter_map(|entry| {
             let path = entry.path();
-            if path.extension() == Some(OsStr::new("json")) {
+            if is_agent_record_file(&path) {
                 path.file_stem()
                     .and_then(|name| name.to_str())
                     .map(str::to_string)
@@ -3540,7 +4032,9 @@ fn build_view(root: &Path, message: Message, agent_id: &str) -> Result<ViewMessa
     )?;
     let awaiting_me = meta
         .map(|meta| {
-            message_awaited(&message, &meta).iter().any(|a| a == agent_id)
+            message_awaited(&message, &meta)
+                .iter()
+                .any(|a| a == agent_id)
                 && !my_status.as_deref().map(ask_is_terminal).unwrap_or(false)
         })
         .unwrap_or(false);
@@ -3671,8 +4165,10 @@ fn build_thread_view(
     messages: &[Message],
     limit: usize,
 ) -> Result<(ThreadNode, usize)> {
-    let by_id: BTreeMap<&str, &Message> =
-        messages.iter().map(|message| (message.id.as_str(), message)).collect();
+    let by_id: BTreeMap<&str, &Message> = messages
+        .iter()
+        .map(|message| (message.id.as_str(), message))
+        .collect();
     if !by_id.contains_key(root_id) {
         return Err(RaftError::new(format!(
             "message {root_id:?} was not found in visible thread"
@@ -3684,7 +4180,10 @@ fn build_thread_view(
     let mut children_of: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
     for message in messages {
         if let Some(parent) = message.after.as_deref() {
-            children_of.entry(parent).or_default().push(message.id.as_str());
+            children_of
+                .entry(parent)
+                .or_default()
+                .push(message.id.as_str());
         }
     }
     let mut reachable: BTreeSet<&str> = BTreeSet::new();
@@ -3705,8 +4204,11 @@ fn build_thread_view(
     } else {
         // Keep the root plus the newest `limit - 1` of the remaining reachable
         // ids. Ids are monotonically increasing, so highest id == most recent.
-        let mut others: Vec<&str> =
-            reachable.iter().copied().filter(|id| *id != root_id).collect();
+        let mut others: Vec<&str> = reachable
+            .iter()
+            .copied()
+            .filter(|id| *id != root_id)
+            .collect();
         others.sort();
         let tail = &others[others.len() - (limit - 1)..];
         let mut kept: BTreeSet<&str> = tail.iter().copied().collect();
@@ -3729,7 +4231,9 @@ fn build_thread_view(
                 display_children.entry(parent).or_default().push(id);
                 break;
             }
-            ancestor = by_id.get(parent).and_then(|message| message.after.as_deref());
+            ancestor = by_id
+                .get(parent)
+                .and_then(|message| message.after.as_deref());
         }
     }
     for kids in display_children.values_mut() {
@@ -4104,10 +4608,7 @@ fn ensure_participant(meta: &Meta, agent_id: &str) -> Result<()> {
     if !meta.participants.iter().any(|item| item == agent_id) {
         return Err(RaftError::coded(
             "not_participant",
-            format!(
-                "agent {agent_id:?} is not a participant in {:?}",
-                meta.id
-            ),
+            format!("agent {agent_id:?} is not a participant in {:?}", meta.id),
         )
         .with_details(serde_json::json!({ "participants": meta.participants })));
     }

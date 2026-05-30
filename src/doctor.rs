@@ -2,7 +2,7 @@ use crate::SCHEMA_VERSION;
 use crate::cli::DoctorArgs;
 use crate::error::Result;
 use crate::receipt_recipients;
-use crate::storage::collect_orphan_temp_files;
+use crate::storage::{collect_orphan_temp_files, is_agent_record_file};
 use crate::types::{Agent, HeartbeatState, LockOwner, Message, Meta, Receipt, WatchState};
 use crate::util::{parse_time, process_is_alive, validate_agent_state, validate_id};
 use chrono::Utc;
@@ -187,7 +187,7 @@ fn doctor_scan_agents(root: &Path, report: &mut DoctorReport) -> BTreeSet<String
     let mut claimed = BTreeSet::new();
     for entry in doctor_sorted_read_dir(root, &root.join("agents"), report) {
         let path = entry.path();
-        if path.extension() != Some(OsStr::new("json")) {
+        if !is_agent_record_file(&path) {
             continue;
         }
         report.counts.agents += 1;

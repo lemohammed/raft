@@ -132,6 +132,103 @@ pub(crate) enum Commands {
         #[command(subcommand)]
         command: GrantCommand,
     },
+    /// Delegate, track, and cancel remote tasks (capability-gated tool calls).
+    Task {
+        #[command(subcommand)]
+        command: TaskCommand,
+    },
+    /// Run the executor loop: claim authorized task asks and run their tools sandboxed.
+    Run(RunArgs),
+}
+
+#[derive(Subcommand)]
+pub(crate) enum TaskCommand {
+    /// Dispatch a tool call to a worker as a capability-gated task ask.
+    Dispatch(TaskDispatchArgs),
+    /// Show a task's status (worker receipt lifecycle) and result, if any.
+    Status(TaskStatusArgs),
+    /// Cancel a task you dispatched (withdraws the obligation).
+    Cancel(TaskCancelArgs),
+}
+
+#[derive(Args)]
+pub(crate) struct TaskDispatchArgs {
+    /// Dispatching agent id.
+    #[arg(long)]
+    pub(crate) from: String,
+    /// Worker agent id to assign the task to.
+    #[arg(long)]
+    pub(crate) to: String,
+    /// Conversation id the task belongs to.
+    #[arg(long)]
+    pub(crate) conversation: Option<String>,
+    /// Channel id the task belongs to.
+    #[arg(long)]
+    pub(crate) channel: Option<String>,
+    /// Tool name to invoke (the Hermes tool_call name).
+    #[arg(long)]
+    pub(crate) tool: String,
+    /// Tool arguments as a JSON object (default `{}`).
+    #[arg(long, default_value = "{}")]
+    pub(crate) args: String,
+    /// Capability token file authorizing the worker to run this tool.
+    #[arg(long)]
+    pub(crate) cap: Option<PathBuf>,
+    /// Maximum runtime, seconds (also bounded by any capability limit).
+    #[arg(long = "max-runtime-s")]
+    pub(crate) max_runtime_s: Option<u64>,
+    /// Maximum captured output, bytes.
+    #[arg(long = "max-output-bytes")]
+    pub(crate) max_output_bytes: Option<u64>,
+    /// Emit machine-readable JSON instead of text.
+    #[arg(long)]
+    pub(crate) json: bool,
+}
+
+#[derive(Args)]
+pub(crate) struct TaskStatusArgs {
+    /// Task id (the dispatched message id).
+    pub(crate) task: String,
+    /// Emit machine-readable JSON instead of text.
+    #[arg(long)]
+    pub(crate) json: bool,
+}
+
+#[derive(Args)]
+pub(crate) struct TaskCancelArgs {
+    /// Task id (the dispatched message id).
+    pub(crate) task: String,
+    /// Dispatching agent id (must be the task's sender).
+    #[arg(long)]
+    pub(crate) from: String,
+    /// Optional reason recorded on the cancellation notice.
+    #[arg(long)]
+    pub(crate) reason: Option<String>,
+    /// Emit machine-readable JSON instead of text.
+    #[arg(long)]
+    pub(crate) json: bool,
+}
+
+#[derive(Args)]
+pub(crate) struct RunArgs {
+    /// Worker agent id whose authorized tasks this executor will run.
+    pub(crate) agent: String,
+    /// Tool registration as `name=/path/to/executable` (repeatable).
+    #[arg(long = "tool")]
+    pub(crate) tool: Vec<String>,
+    /// Pin the trusted capability root: an agent id or `ed25519:<hex>` key.
+    /// When set, a task whose capability is not rooted here is rejected.
+    #[arg(long)]
+    pub(crate) trust: Option<String>,
+    /// Process the currently-pending tasks once and exit (good for cron/tests).
+    #[arg(long)]
+    pub(crate) once: bool,
+    /// Poll interval in seconds when looping (ignored with --once).
+    #[arg(long, default_value_t = 1.0)]
+    pub(crate) interval: f64,
+    /// Emit machine-readable JSON instead of text.
+    #[arg(long)]
+    pub(crate) json: bool,
 }
 
 #[derive(Subcommand)]
@@ -150,7 +247,7 @@ pub(crate) enum GrantCommand {
 /// omitted dimensions are left unconstrained by the block being created.
 #[derive(Args)]
 pub(crate) struct CaveatArgs {
-    /// Comma-separated allowed action verbs (e.g. task.dispatch,task.result).
+    /// Comma-separated allowed action verbs (e.g. tool.run,task.dispatch).
     #[arg(long)]
     pub(crate) action: Option<String>,
     /// Comma-separated allowed tool names.
