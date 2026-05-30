@@ -4843,3 +4843,119 @@ fn identity_verify_detects_a_tampered_passport() {
     let file_json: serde_json::Value = serde_json::from_slice(&file_verify.stderr).unwrap();
     assert_eq!(file_json["error"]["verified"], false);
 }
+
+#[test]
+fn capability_grant_attenuate_and_verify_end_to_end() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(&bus, &["id", "new", "alice", "--json"]);
+    run(&bus, &["id", "new", "bob", "--json"]);
+    run(&bus, &["id", "new", "carol", "--json"]);
+
+    // Alice issues bob a capability to dispatch the `deploy` tool in staging.
+    let root_token = bus.join("cap-root.json");
+    run(
+        &bus,
+        &[
+            "grant", "new", "--issuer", "alice", "--to", "bob",
+            "--action", "task.dispatch,task.result", "--tool", "deploy",
+            "--env", "staging", "--ttl", "1h", "--out", root_token.to_str().unwrap(),
+            "--json",
+        ],
+    );
+
+    // Bob can dispatch deploy in staging, rooted at alice.
+    let ok = run(
+        &bus,
+        &[
+            "grant", "verify", "--token-file", root_token.to_str().unwrap(),
+            "--root", "alice", "--action", "task.dispatch", "--tool", "deploy",
+            "--env", "staging", "--json",
+        ],
+    );
+    let ok_json: serde_json::Value = serde_json::from_slice(&ok.stdout).unwrap();
+    assert_eq!(ok_json["authorized"], true);
+
+    // A tool outside the grant is denied with the stable not_authorized code.
+    let denied = run_fail(
+        &bus,
+        &[
+            "grant", "verify", "--token-file", root_token.to_str().unwrap(),
+            "--root", "alice", "--action", "task.dispatch", "--tool", "delete",
+            "--env", "staging", "--json",
+        ],
+    );
+    let denied_json: serde_json::Value = serde_json::from_slice(&denied.stderr).unwrap();
+    assert_eq!(denied_json["error"]["code"], "not_authorized");
+
+    // Bob attenuates to carol: only task.dispatch (drops task.result).
+    let sub_token = bus.join("cap-sub.json");
+    run(
+        &bus,
+        &[
+            "grant", "attenuate", "--holder", "bob", "--to", "carol",
+            "--token-file", root_token.to_str().unwrap(), "--action", "task.dispatch",
+            "--out", sub_token.to_str().unwrap(), "--json",
+        ],
+    );
+
+    // Carol's token still verifies for dispatch...
+    let carol_ok = run(
+        &bus,
+        &[
+            "grant", "verify", "--token-file", sub_token.to_str().unwrap(),
+            "--root", "alice", "--action", "task.dispatch", "--tool", "deploy",
+            "--env", "staging", "--json",
+        ],
+    );
+    let carol_ok_json: serde_json::Value = serde_json::from_slice(&carol_ok.stdout).unwrap();
+    assert_eq!(carol_ok_json["authorized"], true);
+
+    // ...but task.result was attenuated away.
+    let carol_denied = run_fail(
+        &bus,
+        &[
+            "grant", "verify", "--token-file", sub_token.to_str().unwrap(),
+            "--root", "alice", "--action", "task.result", "--json",
+        ],
+    );
+    let carol_denied_json: serde_json::Value = serde_json::from_slice(&carol_denied.stderr).unwrap();
+    assert_eq!(carol_denied_json["error"]["code"], "not_authorized");
+
+    // inspect verifies signatures and reports the two-block chain.
+    let inspect = run(&bus, &["grant", "inspect", "--token-file", sub_token.to_str().unwrap(), "--json"]);
+    let inspect_json: serde_json::Value = serde_json::from_slice(&inspect.stdout).unwrap();
+    assert_eq!(inspect_json["signatures_valid"], true);
+    assert_eq!(inspect_json["blocks"].as_array().unwrap().len(), 2);
+    assert_eq!(inspect_json["effective"]["action"], serde_json::json!(["task.dispatch"]));
+}
+
+#[test]
+fn capability_only_the_holder_can_attenuate_via_cli() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(&bus, &["id", "new", "alice", "--json"]);
+    run(&bus, &["id", "new", "bob", "--json"]);
+    run(&bus, &["id", "new", "mallory", "--json"]);
+
+    let token = bus.join("cap.json");
+    run(
+        &bus,
+        &[
+            "grant", "new", "--issuer", "alice", "--to", "bob",
+            "--action", "task.dispatch", "--out", token.to_str().unwrap(), "--json",
+        ],
+    );
+
+    // Mallory holds no delegation, so she cannot attenuate bob's token.
+    let mallory = run_fail(
+        &bus,
+        &[
+            "grant", "attenuate", "--holder", "mallory", "--to", "mallory",
+            "--token-file", token.to_str().unwrap(), "--action", "task.dispatch",
+            "--out", bus.join("evil.json").to_str().unwrap(), "--json",
+        ],
+    );
+    let mallory_json: serde_json::Value = serde_json::from_slice(&mallory.stderr).unwrap();
+    assert_eq!(mallory_json["ok"], false);
+}

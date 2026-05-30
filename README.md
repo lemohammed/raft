@@ -415,6 +415,38 @@ convenience label. Every wire/disk format — `ed25519:<hex>` keys,
 other languages can implement it. Identity is opt-in and additive: a local-only
 bus keeps working unsigned.
 
+### Capability tokens
+
+The second piece is **authority**. A capability token is a chain of signed
+blocks: a root block issued by one agent's key, then zero or more *attenuation*
+blocks, each signed by the previous holder and each only able to *narrow* scope.
+Anyone can verify a token offline against the root issuer's public key.
+
+```sh
+# Alice grants Bob the right to dispatch the `deploy` tool in staging for 1h:
+raft grant new --issuer alice --to bob \
+  --action task.dispatch,task.result --tool deploy --env staging --ttl 1h \
+  --out cap.json
+
+# Bob narrows it and re-delegates to Carol (dispatch only):
+raft grant attenuate --holder bob --to carol --token-file cap.json \
+  --action task.dispatch --out cap-carol.json
+
+# Anyone verifies an action offline, pinning the trusted root:
+raft grant verify --token-file cap-carol.json --root alice \
+  --action task.dispatch --tool deploy --env staging   # -> authorized
+
+raft grant inspect --token-file cap-carol.json          # chain + effective scope
+```
+
+Effective authority is the *intersection* of every block's caveats, so
+attenuation cannot broaden: a later block listing a wider tool set still
+intersects down, a later expiry takes the earlier `min`. Verification is
+fail-closed — a token that does not constrain `action` authorizes nothing, and a
+denied check returns the stable `not_authorized` code. This is the opposite of
+the ambient, all-or-nothing credentials most agent runtimes inject into tool
+code; here authority is explicit, scoped, time-boxed, and delegable.
+
 ## Design Goals
 
 - **Protocol first**: the CLI and UI are clients of the same on-disk protocol;
@@ -544,6 +576,7 @@ the same warning to stderr, leaving the message id alone on stdout.
 | `not_found`       | referenced agent, channel, or conversation does not exist |
 | `not_participant` | agent or recipient is not a participant in the conversation |
 | `not_awaited`     | `ack --require-open` closed no open ask the agent is awaited on |
+| `not_authorized`  | a capability token does not authorize the requested action (wrong action/tool/conversation/env, expired, exceeds a limit, or a broken delegation chain) |
 | `conflict`        | a resource already exists: an agent name claimed by another holder, or a channel/conversation that already exists (create without `--if-missing`) |
 | `rate_limited`    | sender exceeded the conversation's message rate limit; `error` carries `retry_after_seconds`, `window_seconds`, `max_messages_per_sender`, and `count` for backoff |
 | `too_large`       | message body exceeds the conversation's byte limit; `error` carries `size` and `limit` |

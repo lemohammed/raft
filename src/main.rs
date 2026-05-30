@@ -1,5 +1,6 @@
 #[macro_use]
 mod error;
+mod capability;
 mod cli;
 mod crypto;
 mod doctor;
@@ -129,6 +130,12 @@ fn command_wants_json(command: &Commands) -> bool {
             IdCommand::Verify(args) => args.json,
             IdCommand::Fingerprint(args) => args.json,
         },
+        Commands::Grant { command } => match command {
+            GrantCommand::New(args) => args.json,
+            GrantCommand::Attenuate(args) => args.json,
+            GrantCommand::Verify(args) => args.json,
+            GrantCommand::Inspect(args) => args.json,
+        },
         _ => false,
     }
 }
@@ -182,7 +189,198 @@ fn run(root: PathBuf, command: Commands) -> Result<()> {
             IdCommand::Verify(args) => cmd_id_verify(&root, args),
             IdCommand::Fingerprint(args) => cmd_id_fingerprint(&root, args),
         },
+        Commands::Grant { command } => match command {
+            GrantCommand::New(args) => cmd_grant_new(&root, args),
+            GrantCommand::Attenuate(args) => cmd_grant_attenuate(&root, args),
+            GrantCommand::Verify(args) => cmd_grant_verify(&root, args),
+            GrantCommand::Inspect(args) => cmd_grant_inspect(&root, args),
+        },
     }
+}
+
+/// Resolve a holder/issuer/root reference to an `ed25519:<hex>` public key: a
+/// literal key is taken as-is (after a validity check); otherwise it is an agent
+/// id whose passport supplies the key.
+fn resolve_pubkey(root: &Path, value: &str) -> Result<String> {
+    if value.starts_with(crypto::PUBKEY_PREFIX) {
+        crypto::parse_pubkey(value)?;
+        return Ok(value.to_string());
+    }
+    let agent_id = validate_id(value, "agent id")?;
+    let passport = identity::load_passport(root, &agent_id)?.ok_or_else(|| {
+        RaftError::coded(
+            "not_found",
+            format!("no identity for {agent_id:?}; run `raft id new {agent_id}`"),
+        )
+    })?;
+    Ok(passport.pubkey)
+}
+
+/// Build capability caveats from CLI flags, turning `--ttl` into an absolute
+/// `expires_at`.
+fn build_caveats(args: &CaveatArgs) -> Result<capability::Caveats> {
+    let parse_set = |value: &Option<String>| -> Result<Vec<String>> {
+        match value {
+            Some(raw) => split_csv(raw),
+            None => Ok(Vec::new()),
+        }
+    };
+    let expires_at = match &args.ttl {
+        Some(ttl) => Some(iso_after(parse_duration_seconds(ttl)?)),
+        None => None,
+    };
+    Ok(capability::Caveats {
+        action: parse_set(&args.action)?,
+        tool: parse_set(&args.tool)?,
+        conversation: args.conversation.clone(),
+        env: parse_set(&args.env)?,
+        max_runtime_s: args.max_runtime_s,
+        max_output_bytes: args.max_output_bytes,
+        expires_at,
+    })
+}
+
+/// Parse a duration like `30m`, `2h`, `7d` (or bare seconds) into seconds.
+fn parse_duration_seconds(value: &str) -> Result<u64> {
+    let (number, unit) = match value.char_indices().last() {
+        Some((idx, last)) if last.is_ascii_alphabetic() => (&value[..idx], &value[idx..]),
+        _ => (value, "s"),
+    };
+    let amount: u64 = number
+        .parse()
+        .map_err(|_| RaftError::new(format!("invalid duration {value:?}; try 30m, 2h, 7d")))?;
+    let seconds = match unit {
+        "s" => amount,
+        "m" => amount * 60,
+        "h" => amount * 3600,
+        "d" => amount * 86_400,
+        _ => bail!("invalid duration {value:?}; use s, m, h, or d"),
+    };
+    Ok(seconds)
+}
+
+/// Emit a freshly-minted/attenuated token, either to `--out` or to stdout.
+fn emit_token(token: &capability::Token, out: &Option<PathBuf>, json: bool) -> Result<()> {
+    match out {
+        Some(path) => {
+            atomic_write_json(path, token)?;
+            if json {
+                emit_ok(serde_json::json!({
+                    "out": path.display().to_string(),
+                    "root_issuer": token.root_issuer,
+                    "blocks": token.blocks.len(),
+                }))?;
+            } else {
+                println!("wrote capability to {}", path.display());
+            }
+        }
+        None => println!("{}", serde_json::to_string_pretty(token)?),
+    }
+    Ok(())
+}
+
+fn cmd_grant_new(root: &Path, args: GrantNewArgs) -> Result<()> {
+    let issuer_id = validate_id(&args.issuer, "agent id")?;
+    ensure_root(root)?;
+    let keypair = identity::load_keypair(root, &issuer_id)?.ok_or_else(|| {
+        RaftError::coded(
+            "not_found",
+            format!("no keypair for {issuer_id:?}; run `raft id new {issuer_id}`"),
+        )
+    })?;
+    let holder = resolve_pubkey(root, &args.to)?;
+    let caveats = build_caveats(&args.caveats)?;
+    let token = capability::issue_root(&keypair, &holder, caveats)?;
+    emit_token(&token, &args.out, args.json)
+}
+
+fn cmd_grant_attenuate(root: &Path, args: GrantAttenuateArgs) -> Result<()> {
+    let holder_id = validate_id(&args.holder, "agent id")?;
+    ensure_root(root)?;
+    let keypair = identity::load_keypair(root, &holder_id)?.ok_or_else(|| {
+        RaftError::coded(
+            "not_found",
+            format!("no keypair for {holder_id:?}; run `raft id new {holder_id}`"),
+        )
+    })?;
+    let token: capability::Token = read_json(&args.token_file)?.ok_or_else(|| {
+        RaftError::coded("not_found", format!("no such token file: {}", args.token_file.display()))
+    })?;
+    let new_holder = resolve_pubkey(root, &args.to)?;
+    let caveats = build_caveats(&args.caveats)?;
+    let attenuated = capability::attenuate(&token, &keypair, &new_holder, caveats)?;
+    emit_token(&attenuated, &args.out, args.json)
+}
+
+fn cmd_grant_verify(root: &Path, args: GrantVerifyArgs) -> Result<()> {
+    let token: capability::Token = read_json(&args.token_file)?.ok_or_else(|| {
+        RaftError::coded("not_found", format!("no such token file: {}", args.token_file.display()))
+    })?;
+    let expected_root = match &args.root {
+        Some(value) => {
+            ensure_root(root)?;
+            Some(resolve_pubkey(root, value)?)
+        }
+        None => None,
+    };
+    let request = capability::AuthRequest {
+        action: &args.action,
+        conversation: args.conversation.as_deref(),
+        tool: args.tool.as_deref(),
+        env: args.env.as_deref(),
+        now: Utc::now(),
+        requested_runtime_s: None,
+        requested_output_bytes: None,
+    };
+    capability::authorize(&token, expected_root.as_deref(), &request)?;
+    if args.json {
+        emit_ok(serde_json::json!({
+            "authorized": true,
+            "action": args.action,
+            "root_issuer": token.root_issuer,
+        }))?;
+    } else {
+        println!("authorized: {} (root {})", args.action, token.root_issuer);
+    }
+    Ok(())
+}
+
+fn cmd_grant_inspect(_root: &Path, args: GrantInspectArgs) -> Result<()> {
+    let token: capability::Token = read_json(&args.token_file)?.ok_or_else(|| {
+        RaftError::coded("not_found", format!("no such token file: {}", args.token_file.display()))
+    })?;
+    let effective = capability::verify_chain(&token, None)?;
+    let effective_json = capability::effective_to_json(&effective);
+    if args.json {
+        let blocks: Vec<serde_json::Value> = token
+            .blocks
+            .iter()
+            .map(|block| {
+                serde_json::json!({
+                    "issuer": block.issuer,
+                    "holder": block.holder,
+                    "caveats": block.caveats,
+                })
+            })
+            .collect();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "root_issuer": token.root_issuer,
+                "blocks": blocks,
+                "effective": effective_json,
+                "signatures_valid": true,
+            }))?
+        );
+    } else {
+        println!("capability rooted at {}", token.root_issuer);
+        for (index, block) in token.blocks.iter().enumerate() {
+            println!("  block {index}: {} -> {}", block.issuer, block.holder);
+        }
+        println!("  signatures: valid");
+        println!("  effective scope: {effective_json}");
+    }
+    Ok(())
 }
 
 /// `raft id new` — mint an Ed25519 keypair + self-signed passport for an agent.

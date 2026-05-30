@@ -28,6 +28,22 @@ delegation over an untrusted network. See
   - New `crypto` module: Ed25519 sign/verify, SHA-256 content hashes, hex coding,
     and canonical JSON (sorted-key compact bytes) — every format specified for
     re-implementation in other languages. Dual-licensed MIT OR Apache-2.0.
+- Capability tokens (L2): attenuable, offline-verifiable, scoped authority.
+  - `raft grant new --issuer <agent> --to <agent|pubkey> --action … [--tool …]
+    [--conversation …] [--env …] [--ttl …] [--max-runtime-s …]
+    [--max-output-bytes …]` issues a root capability signed by the issuer's key.
+  - `raft grant attenuate --holder <agent> --to <agent|pubkey> --token-file …`
+    appends a narrowing block, signed by the current holder; only the holder can
+    attenuate. Effective authority is the *intersection* of every block, so
+    attenuation can never broaden (wider sets intersect down, later expiries take
+    the earlier `min`).
+  - `raft grant verify --token-file … [--root <agent|pubkey>] --action <verb>
+    [--conversation …] [--tool …] [--env …]` authorizes a concrete action
+    offline; `raft grant inspect` prints the verified chain and effective scope.
+  - Verification is fail-closed: a token that does not constrain `action`
+    authorizes nothing, a constrained dimension the request omits is denied, and
+    a broken delegation chain, forged caveat, expiry, or exceeded limit is
+    rejected. New stable error code `not_authorized`.
 
 ### Fixed
 

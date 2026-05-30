@@ -37,6 +37,7 @@ ERROR CODES (stable; surfaced as error.code in --json mode)
   not_found         referenced agent, channel, or conversation does not exist
   not_participant   agent or recipient is not a participant in the conversation
   not_awaited       `ack --require-open` closed no open ask you are awaited on
+  not_authorized    a capability token does not authorize the requested action
   conflict          a resource already exists: an agent name claimed by \
 another holder, or a channel/conversation created without --if-missing
   rate_limited      sender exceeded the conversation's message rate limit
@@ -126,6 +127,124 @@ pub(crate) enum Commands {
         #[command(subcommand)]
         command: IdCommand,
     },
+    /// Issue, attenuate, and verify capability tokens (scoped, delegable authority).
+    Grant {
+        #[command(subcommand)]
+        command: GrantCommand,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum GrantCommand {
+    /// Issue a new root capability from an issuer to a holder.
+    New(GrantNewArgs),
+    /// Attenuate (narrow) an existing capability and re-delegate it.
+    Attenuate(GrantAttenuateArgs),
+    /// Verify a capability authorizes a specific action.
+    Verify(GrantVerifyArgs),
+    /// Verify a capability's signatures and print its chain and effective scope.
+    Inspect(GrantInspectArgs),
+}
+
+/// Caveats shared by `grant new` and `grant attenuate`. Each narrows authority;
+/// omitted dimensions are left unconstrained by the block being created.
+#[derive(Args)]
+pub(crate) struct CaveatArgs {
+    /// Comma-separated allowed action verbs (e.g. task.dispatch,task.result).
+    #[arg(long)]
+    pub(crate) action: Option<String>,
+    /// Comma-separated allowed tool names.
+    #[arg(long)]
+    pub(crate) tool: Option<String>,
+    /// Restrict to a single conversation id.
+    #[arg(long)]
+    pub(crate) conversation: Option<String>,
+    /// Comma-separated allowed execution environments.
+    #[arg(long)]
+    pub(crate) env: Option<String>,
+    /// Expiry as a duration from now (e.g. 30m, 2h, 7d).
+    #[arg(long)]
+    pub(crate) ttl: Option<String>,
+    /// Maximum task runtime in seconds.
+    #[arg(long = "max-runtime-s")]
+    pub(crate) max_runtime_s: Option<u64>,
+    /// Maximum captured output in bytes.
+    #[arg(long = "max-output-bytes")]
+    pub(crate) max_output_bytes: Option<u64>,
+}
+
+#[derive(Args)]
+pub(crate) struct GrantNewArgs {
+    /// Issuing agent id (must have a local keypair from `raft id new`).
+    #[arg(long)]
+    pub(crate) issuer: String,
+    /// Holder: an agent id with a passport on this bus, or an `ed25519:<hex>` key.
+    #[arg(long)]
+    pub(crate) to: String,
+    #[command(flatten)]
+    pub(crate) caveats: CaveatArgs,
+    /// Write the token to this file instead of stdout.
+    #[arg(long)]
+    pub(crate) out: Option<PathBuf>,
+    /// Emit machine-readable JSON instead of text (when writing to --out).
+    #[arg(long)]
+    pub(crate) json: bool,
+}
+
+#[derive(Args)]
+pub(crate) struct GrantAttenuateArgs {
+    /// Current holder agent id (must hold the token and have a local keypair).
+    #[arg(long)]
+    pub(crate) holder: String,
+    /// New holder: an agent id with a passport, or an `ed25519:<hex>` key.
+    #[arg(long)]
+    pub(crate) to: String,
+    /// Path to the token to attenuate.
+    #[arg(long = "token-file")]
+    pub(crate) token_file: PathBuf,
+    #[command(flatten)]
+    pub(crate) caveats: CaveatArgs,
+    /// Write the attenuated token to this file instead of stdout.
+    #[arg(long)]
+    pub(crate) out: Option<PathBuf>,
+    /// Emit machine-readable JSON instead of text (when writing to --out).
+    #[arg(long)]
+    pub(crate) json: bool,
+}
+
+#[derive(Args)]
+pub(crate) struct GrantVerifyArgs {
+    /// Path to the token to verify.
+    #[arg(long = "token-file")]
+    pub(crate) token_file: PathBuf,
+    /// Expected root issuer: an agent id or `ed25519:<hex>` key. Pins trust.
+    #[arg(long)]
+    pub(crate) root: Option<String>,
+    /// Action verb to authorize (required).
+    #[arg(long)]
+    pub(crate) action: String,
+    /// Conversation context for the request.
+    #[arg(long)]
+    pub(crate) conversation: Option<String>,
+    /// Tool context for the request.
+    #[arg(long)]
+    pub(crate) tool: Option<String>,
+    /// Environment context for the request.
+    #[arg(long)]
+    pub(crate) env: Option<String>,
+    /// Emit machine-readable JSON instead of text.
+    #[arg(long)]
+    pub(crate) json: bool,
+}
+
+#[derive(Args)]
+pub(crate) struct GrantInspectArgs {
+    /// Path to the token to inspect.
+    #[arg(long = "token-file")]
+    pub(crate) token_file: PathBuf,
+    /// Emit machine-readable JSON instead of text.
+    #[arg(long)]
+    pub(crate) json: bool,
 }
 
 #[derive(Subcommand)]
