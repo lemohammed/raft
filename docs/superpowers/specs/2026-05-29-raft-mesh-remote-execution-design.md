@@ -366,20 +366,100 @@ cryptographic accountability and failure attribution.
 
 ## 9. Prior art & gaps (reconciled with deep-research)
 
-This section is seeded from first-principles analysis and **reconciled with the
-deep-research gap report** (`wf_19fa669a-946`) as it lands; each row ends in the
-"GAP" the layer above closes.
+This section is reconciled with a deep-research gap report (run
+`wf_19fa669a-946`: 24 primary sources, 112 extracted claims, 25 adversarially
+verified by 3-vote, 21 confirmed). Findings below are the *confirmed* ones;
+where the verified corpus was thin, the row is marked **design-led** and treated
+as a hypothesis to validate, not an established fact.
 
-| Dimension | Letta | Hermes format | A2A / MCP | raft mesh closes it at |
+### 9.1 Confirmed findings (cited)
+
+- **Letta has no agent-to-agent obligation/receipt model.** Multi-agent
+  coordination routes through the central server REST API: cross-agent tools
+  (`send_message_to_agent_async`, `..._and_wait_for_reply`,
+  `..._matching_all_tags`) are fire-and-forget or block-for-reply; async returns
+  only a "delivered receipt," not a tracked delegation lifecycle. [letta-multiagent]
+- **Letta's shared state is last-writer-wins.** `memory_rethink` full-rewrites are
+  LWW with documented lost-update anti-patterns; only `memory_insert` is
+  append-safe and `memory_replace` is optimistic compare-and-swap. There is no
+  transactional/locking/CRDT/consensus protocol, and no *documented* cross-host
+  operation. [letta-sharedmem] → validates **L1**'s rejection of LWW in favor of
+  signed append-only logs.
+- **Letta tool code receives ambient platform credentials.** Server tools are
+  auto-injected with `LETTA_AGENT_ID`, `LETTA_PROJECT_ID`, `LETTA_API_KEY` and a
+  pre-initialized client with *full API access*; E2B sandboxing is **opt-in**
+  (arbitrary TypeScript runs unsandboxed without an `E2B_API_KEY`). [letta-tools]
+  → validates **L2** (capability-scoped least-privilege) and **L5** (enforced,
+  not optional, isolation contract).
+- **The MemGPT paper** (arXiv:2310.08560) is a single-agent virtual-context
+  design and contains *none* of identity, auth, capability security, sandboxing,
+  peer discovery, or distributed state. [memgpt] → every cross-host primitive is
+  genuinely new ground.
+- **The Hermes function-calling *format* is in-context serialization only.**
+  Its `schema.py` defines exactly three models — `FunctionCall {name, arguments}`,
+  `FunctionDefinition {name, description?, parameters?}`,
+  `FunctionSignature {function, type:"function"}` — with tool defs in
+  `<tools>…</tools>`, calls in `<tool_call>…</tool_call>`, results in
+  `<tool_response>…</tool_response>` (ChatML). It has **zero** fields for
+  transport, endpoints, network identity, auth, capability scoping,
+  async/long-running calls, or result streaming. [hermes-schema][hermes-repo] →
+  directly shapes **L4**: raft mesh adopts the `{name, arguments}` call shape
+  verbatim and supplies *exactly* the missing remote layer around it.
+
+### 9.2 Critical scoping caveat (do not overclaim)
+
+The research flagged a trap we explicitly avoid: a **separate** Nous artifact —
+the **"Hermes Agent" runtime** (`hermes-agent.nousresearch.com`) — *does* add
+HTTP transport, A2A over JSON-RPC 2.0 / gRPC / SSE streaming, Bearer/API-key
+auth, MCP-based tool auto-discovery, a self-registering tool registry, and a
+`task_id` session-correlation kwarg. So "no transport/auth/discovery" is true of
+the **Hermes function-calling format/schema**, **not** of the whole Nous Hermes
+ecosystem. raft mesh benchmarks against the *format* (per the operator's choice)
+and treats the Hermes Agent runtime and **Google's A2A protocol**
+(`a2a-protocol.org`: Agent Cards, streaming/async task states) as **convergent
+prior art** for the transport/streaming layer — evidence the *transport* shape is
+well-trodden. raft mesh's differentiation is **not** "we have a transport"; it is
+the combination the others lack: an **obligation/terminal-receipt delegation
+lifecycle**, **attenuable capability tokens**, **signed hash-chained logs**, and
+**local-first home-node federation** (no central server).
+
+### 9.3 Gap-closure map
+
+| Dimension | Letta | Hermes *format* | A2A / Hermes Agent runtime | raft mesh closes at |
 |---|---|---|---|---|
-| Agent identity | server-assigned id | n/a | A2A "agent card" (no required crypto) | **L0** Ed25519 passports |
-| History integrity | server DB | unsigned | transport TLS only | **L1** signed hash-chained logs |
-| Delegated authority | API key (coarse) | n/a | OAuth-ish, no attenuation | **L2** attenuable capabilities |
-| Decentralization | central server | n/a | client-server | **L3** home-node + pull federation |
-| A2A delegation lifecycle | none | n/a | task states, no obligation/withdraw | **L4** ask-carrying tool-call |
-| Sandbox | central (e2b/docker) | n/a | unspecified | **L5** portable sandbox + artifacts |
+| Agent identity | server-assigned id | none | A2A Agent Card (crypto not required) | **L0** Ed25519 passports |
+| History integrity | server DB, LWW | unsigned | transport TLS only | **L1** signed hash-chained logs |
+| Delegated authority | ambient API key | none | Bearer/API-key, no attenuation | **L2** attenuable capabilities |
+| Decentralization | central server | n/a | client-server / hub | **L3** home-node + pull federation |
+| Delegation lifecycle | delivered-receipt only | none | task states, no obligation/withdraw | **L4** ask-carrying tool-call |
+| Sandbox | opt-in E2B, ambient creds | n/a | unspecified | **L5** enforced sandbox + artifacts |
 | Org structure | none | n/a | none | **L6** signed roles + delegation tree |
 | Accountability | server logs | n/a | partial trace | **L1+L6** verifiable replay |
+
+### 9.4 Honestly under-evidenced (design-led; validate later)
+
+The 3-vote verification did **not** surface surviving claims for: competing
+identity/capability standards (Google A2A auth specifics, MCP transport/auth,
+SPIFFE/SVID, W3C DIDs, macaroons/biscuit) [a2a-spec][spiffe]; concrete P2P
+topology mechanics (discovery, NAT traversal, gossip, FIPA-ACL, ANP); and the
+org-structure/observability models of CrewAI/AutoGen/LangGraph/Swarm
+[langgraph-hier]. raft mesh's choices in **L2** (biscuit/macaroon-style
+attenuation), **L3** (pull replication), and **L6** (signed roles) are therefore
+**design-led hypotheses** drawn from those families' public designs, to be
+validated against primary sources before each milestone hardens. They are
+labeled as such rather than asserted as settled best practice.
+
+### 9.5 References
+
+- [letta-multiagent] https://docs.letta.com/guides/agents/multi-agent/ ; https://docs.letta.com/tutorials/multi-agent-async
+- [letta-sharedmem] https://docs.letta.com/guides/agents/multi-agent-shared-memory/
+- [letta-tools] https://docs.letta.com/guides/core-concepts/tools/server-tools/ ; https://docs.letta.com/guides/docker/
+- [memgpt] https://arxiv.org/abs/2310.08560
+- [hermes-schema] https://github.com/NousResearch/Hermes-Function-Calling/blob/main/schema.py
+- [hermes-repo] https://github.com/NousResearch/Hermes-Function-Calling ; https://huggingface.co/datasets/NousResearch/hermes-function-calling-v1
+- [a2a-spec] https://a2a-protocol.org/latest/specification/ ; https://a2a-protocol.org/latest/topics/streaming-and-async/
+- [spiffe] https://riptides.io/blog/how-to-deliver-spiffe-identity-to-ai-agents/
+- [langgraph-hier] https://langchain-ai.github.io/langgraph/tutorials/multi_agent/hierarchical_agent_teams/
 
 ## 10. Build order & milestones
 

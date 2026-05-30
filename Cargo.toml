@@ -2,7 +2,11 @@
 name = "raft"
 version = "0.3.0"
 edition = "2024"
-description = "Small filesystem-backed agent-to-agent coordination bus."
+description = "Filesystem-backed agent-to-agent coordination bus, extending into a peer-to-peer agent mesh with cryptographic identity, capability tokens, and remote task delegation."
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+keywords = ["agents", "coordination", "p2p", "capability", "mesh"]
+categories = ["command-line-utilities", "concurrency"]
 
 [dependencies]
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
@@ -11,6 +15,9 @@ notify = "6"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 signal-hook = "0.3"
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+rand = "0.8"
+sha2 = "0.10"
 
 [[bin]]
 name = "raft"
