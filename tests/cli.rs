@@ -3997,6 +3997,71 @@ fn withdraw_closes_an_open_ask_the_sender_no_longer_needs() {
 }
 
 #[test]
+fn withdraw_excludes_recipients_who_already_responded() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(&bus, &["claim", "alice", "--workspace", "."]);
+    run(&bus, &["claim", "bob", "--workspace", "."]);
+    run(&bus, &["claim", "carol", "--workspace", "."]);
+    run(
+        &bus,
+        &[
+            "conversation", "create", "c", "--participants", "alice,bob,carol",
+            "--starter", "alice",
+        ],
+    );
+    let sent = run(
+        &bus,
+        &[
+            "send", "--conversation", "c", "--from", "alice", "--to", "bob,carol",
+            "--subject", "Q", "--body", "both please", "--needs-response-from", "bob,carol",
+        ],
+    );
+    let message_id = String::from_utf8_lossy(&sent.stdout).trim().to_string();
+
+    // bob finishes and reports done; only carol still owes a reply.
+    run(&bus, &["ack", "bob", &message_id, "--status", "done", "--note", "ok"]);
+
+    // Withdrawing must release only the still-open obligation (carol), not bob,
+    // who already discharged the ask.
+    let withdrawn = run(
+        &bus,
+        &["withdraw", &message_id, "--from", "alice", "--reason", "moot", "--json"],
+    );
+    let withdrawn_json: serde_json::Value = serde_json::from_slice(&withdrawn.stdout).unwrap();
+    assert_eq!(
+        withdrawn_json["released"].as_array().unwrap(),
+        &vec![serde_json::json!("carol")],
+        "withdraw must not release a recipient who already responded"
+    );
+
+    // bob, who already finished, must NOT get an `ask withdrawn` notice telling
+    // him to stop work he already completed.
+    let bob_view = run(&bus, &["show", "--agent", "bob", "--conversation", "c", "--json"]);
+    let bob_view_json: serde_json::Value = serde_json::from_slice(&bob_view.stdout).unwrap();
+    assert!(
+        bob_view_json
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|m| m["subject"] != "ask withdrawn"),
+        "a recipient who already responded must not receive a withdrawal notice"
+    );
+
+    // carol, the genuinely-released worker, does get the notice.
+    let carol_view = run(&bus, &["show", "--agent", "carol", "--conversation", "c", "--json"]);
+    let carol_view_json: serde_json::Value = serde_json::from_slice(&carol_view.stdout).unwrap();
+    assert!(
+        carol_view_json
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|m| m["subject"] == "ask withdrawn"),
+        "the released worker should still see the withdrawal notice"
+    );
+}
+
+#[test]
 fn withdraw_rejects_a_message_that_is_not_an_open_ask() {
     let bus = temp_bus();
     run(&bus, &["init"]);

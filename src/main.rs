@@ -1287,7 +1287,21 @@ fn cmd_withdraw(root: &Path, args: WithdrawArgs) -> Result<()> {
         return Ok(());
     }
     let (conv, meta) = load_conversation(root, &message.conversation_id)?;
-    let released = message_awaited(&message, &meta);
+    // `released` must be the genuinely-open obligations, not every awaited agent:
+    // an agent that already recorded a terminal receipt owes nothing, so it must
+    // not appear in `released[]` nor receive an "ask withdrawn, stop work" notice
+    // for work it already finished. Mirror `gather_open_asks`'s terminal-receipt
+    // filter so withdraw agrees with every other open-ask view.
+    let receipts = load_message_receipts(root, &message)?;
+    let released: Vec<String> = message_awaited(&message, &meta)
+        .into_iter()
+        .filter(|who| {
+            !receipts
+                .get(who)
+                .map(|receipt| ask_is_terminal(&receipt.status))
+                .unwrap_or(false)
+        })
+        .collect();
     if released.is_empty() {
         bail_code!(
             "not_found",

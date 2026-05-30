@@ -11,6 +11,14 @@ shell out to `raft` can branch on results reliably.
 
 ### Fixed
 
+- `withdraw` no longer lists — or notifies — recipients who already discharged
+  the ask. `released[]` was computed from `message_awaited`, which returns every
+  awaited agent without consulting receipts, so an agent that already acked
+  `done`/`rejected` appeared in `released[]` and received an "ask withdrawn, stop
+  in-flight work" notice for work it had already completed (contradicting its own
+  receipt and inviting it to discard finished output). `released` now filters out
+  terminal-receipt agents, mirroring `gather_open_asks`; if every recipient has
+  already responded, withdraw reports `not_found` (nothing left to withdraw).
 - Rejoining a room (`channel join` / `conversation add` after a `leave`/`remove`)
   no longer overwrites the agent's `joined_at` membership baseline. `remove`
   preserves `joined_at`, but the join handlers re-inserted it as `now`, pushing
