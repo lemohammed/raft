@@ -2817,8 +2817,18 @@ fn cmd_status(root: &Path, args: StatusArgs) -> Result<()> {
         {
             continue;
         }
+        // Count only `*.json` message files. `atomic_write_json` leaves a `.tmp`
+        // sibling if a crash interrupts the create→rename, and every other count
+        // path (gather_open_asks, visible_messages, channel list, gc archive, ui)
+        // filters by extension — counting raw entries here would inflate `status`
+        // past `me`/`ui`/`channel list` for the same room.
         let messages = sorted_read_dir(&conv.join("messages"))
-            .map(|items| items.len())
+            .map(|items| {
+                items
+                    .iter()
+                    .filter(|entry| entry.path().extension() == Some(OsStr::new("json")))
+                    .count()
+            })
             .unwrap_or(0);
         conversations.push(serde_json::json!({
             "id": meta.id,

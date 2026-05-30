@@ -460,6 +460,52 @@ fn private_message_ack_flow() {
 }
 
 #[test]
+fn status_message_count_ignores_orphan_tmp_files() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(&bus, &["claim", "alice", "--workspace", "."]);
+    run(&bus, &["claim", "bob", "--workspace", "."]);
+    run(
+        &bus,
+        &[
+            "conversation", "create", "c", "--participants", "alice,bob",
+            "--starter", "alice",
+        ],
+    );
+    run(
+        &bus,
+        &[
+            "send", "--conversation", "c", "--from", "alice", "--to", "bob",
+            "--subject", "Q", "--body", "hi",
+        ],
+    );
+
+    let count = |out: &std::process::Output| -> u64 {
+        let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        v["conversations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["id"] == "c")
+            .unwrap()["messages"]
+            .as_u64()
+            .unwrap()
+    };
+
+    let before = count(&run(&bus, &["status", "--json"]));
+
+    // An interrupted atomic write leaves a `.tmp` sibling in messages/. It must
+    // not inflate the count, which must agree with every other count path.
+    fs::write(bus.join("conversations/c/messages/.orphan.1.abc.tmp"), b"{}").unwrap();
+
+    let after = count(&run(&bus, &["status", "--json"]));
+    assert_eq!(
+        before, after,
+        "status must count only .json message files, not orphan .tmp siblings"
+    );
+}
+
+#[test]
 fn heartbeat_watch_keeps_agent_active_and_records_shutdown() {
     let bus = temp_bus();
     run(&bus, &["init"]);

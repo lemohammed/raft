@@ -11,6 +11,12 @@ shell out to `raft` can branch on results reliably.
 
 ### Fixed
 
+- `status` no longer over-counts a conversation's `messages`. It counted every
+  entry in `messages/`, including a crash-orphaned `.tmp` sibling left by an
+  interrupted `atomic_write_json`, so `status` could report more messages than
+  `me`, `channel list`, or the `ui` snapshot for the same room (every other path
+  filters to `*.json`). `status` now filters by extension too, so its count
+  agrees with the rest.
 - `withdraw` no longer lists — or notifies — recipients who already discharged
   the ask. `released[]` was computed from `message_awaited`, which returns every
   awaited agent without consulting receipts, so an agent that already acked
