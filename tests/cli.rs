@@ -2739,6 +2739,54 @@ fn reply_inherits_conversation_thread_and_subject() {
 }
 
 #[test]
+fn a_non_terminal_ack_cannot_downgrade_a_closed_ask() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(&bus, &["claim", "alice", "--workspace", "."]);
+    run(&bus, &["claim", "bob", "--workspace", "."]);
+    run(
+        &bus,
+        &[
+            "conversation", "create", "c", "--participants", "alice,bob",
+            "--starter", "alice",
+        ],
+    );
+    let sent = run(
+        &bus,
+        &[
+            "send", "--conversation", "c", "--from", "alice", "--to", "bob",
+            "--subject", "Q", "--body", "ship it", "--needs-response-from", "bob",
+        ],
+    );
+    let mid = String::from_utf8_lossy(&sent.stdout).trim().to_string();
+
+    let owed_count = |out: &std::process::Output| -> usize {
+        let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        v["owed_to_you"].as_array().unwrap().len()
+    };
+
+    // bob closes the ask with a terminal ack.
+    run(&bus, &["ack", "bob", &mid, "--status", "done", "--note", "shipped"]);
+    assert_eq!(owed_count(&run(&bus, &["awaiting", "alice", "--json"])), 0);
+
+    // A later non-terminal ack must NOT downgrade the stored `done`, which would
+    // silently reopen the ask. The response reports the effective status.
+    let downgrade = run(&bus, &["ack", "bob", &mid, "--status", "working", "--json"]);
+    let dj: serde_json::Value = serde_json::from_slice(&downgrade.stdout).unwrap();
+    assert_eq!(dj["ok"], true);
+    assert_eq!(dj["status"], "done", "the stored terminal status must be preserved");
+    assert_eq!(dj["requested_status"], "working");
+    assert_eq!(dj["downgrade_ignored"], true);
+
+    // The ask stays closed and the receipt still reads `done` with its note.
+    assert_eq!(owed_count(&run(&bus, &["awaiting", "alice", "--json"])), 0);
+    let receipts = run(&bus, &["receipts", &mid, "--json"]);
+    let rj: serde_json::Value = serde_json::from_slice(&receipts.stdout).unwrap();
+    assert_eq!(rj["receipts"]["bob"]["status"], "done");
+    assert_eq!(rj["receipts"]["bob"]["note"], "shipped");
+}
+
+#[test]
 fn reply_with_ack_closes_the_open_ask() {
     let bus = temp_bus();
     run(&bus, &["init"]);

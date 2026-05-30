@@ -1152,9 +1152,12 @@ fn cmd_reply(root: &Path, args: ReplyArgs) -> Result<()> {
             needs_response_from: args.needs_response_from,
         },
     )?;
-    if let Some(status) = &ack_status {
-        write_receipt(root, &sender, &parent, status, args.ack_note)?;
-    }
+    // Report the effective stored status: the downgrade guard may preserve a
+    // stronger existing receipt (e.g. `reply --ack working` after `done`).
+    let effective_ack = match &ack_status {
+        Some(status) => Some(write_receipt(root, &sender, &parent, status, args.ack_note)?),
+        None => None,
+    };
     let offline = offline_recipients(root, &message)?;
     let omitted = if explicit_to {
         Vec::new()
@@ -1172,7 +1175,7 @@ fn cmd_reply(root: &Path, args: ReplyArgs) -> Result<()> {
                 "mentions": message.mentions,
                 "needs_response_from": message.needs_response_from,
                 "after": message.after,
-                "ack": ack_status,
+                "ack": effective_ack,
                 "offline_recipients": offline,
                 "omitted_recipients": omitted,
             }))?
@@ -2638,25 +2641,33 @@ fn cmd_ack(root: &Path, args: AckArgs) -> Result<()> {
         })));
     }
 
-    write_receipt(root, &agent_id, &message, &status, args.note)?;
+    let effective = write_receipt(root, &agent_id, &message, &status, args.note)?;
+    // The guard may have preserved a stronger stored status (e.g. `ack working`
+    // after `done`). Report the status that actually stuck, plus a flag, so the
+    // caller never believes a downgrade took effect.
+    let downgrade_ignored = effective != status;
     if args.json {
         emit_ok(serde_json::json!({
             "message_id": args.message_id,
             "agent": agent_id,
-            "status": status,
+            "status": effective,
+            "requested_status": status,
+            "downgrade_ignored": downgrade_ignored,
             "was_awaited": was_awaited,
             "closed_ask": closed_ask,
             "withdrawn": withdrawn,
         }))?;
     } else {
-        let suffix = if withdrawn.is_some() {
-            " (ask withdrawn)"
+        let suffix = if downgrade_ignored {
+            format!(" (kept {effective}; {status} would downgrade)")
+        } else if withdrawn.is_some() {
+            " (ask withdrawn)".to_string()
         } else if closed_ask {
-            " (closed ask)"
+            " (closed ask)".to_string()
         } else {
-            ""
+            String::new()
         };
-        println!("{} {}{}", status, args.message_id, suffix);
+        println!("{} {}{}", effective, args.message_id, suffix);
     }
     Ok(())
 }
@@ -3494,13 +3505,17 @@ fn load_message_receipts(root: &Path, message: &Message) -> Result<BTreeMap<Stri
     Ok(receipts)
 }
 
+/// Record a receipt, returning the *effective* stored status after applying the
+/// downgrade guard — which may differ from the requested `status` when the write
+/// was preserved (callers report the effective status so an agent is never told
+/// its weaker status stuck when it did not).
 fn write_receipt(
     root: &Path,
     agent_id: &str,
     message: &Message,
     status: &str,
     note: Option<String>,
-) -> Result<()> {
+) -> Result<String> {
     let conv = conversation_path(root, &message.conversation_id)?;
     let meta: Meta = read_json(&conv.join("meta.json"))?.ok_or_else(|| {
         RaftError::coded(
@@ -3534,14 +3549,20 @@ fn write_receipt(
         at: iso_now(),
         note: note.clone(),
     });
-    // A bare `read` marker records that the agent saw the message; it must never
-    // downgrade an explicit ack. Re-reading (or `watch` auto-reading) a message
-    // you already marked `done`/`rejected` — or any non-`read` status — would
-    // otherwise revert the receipt to `read`, silently reopening the ask and
-    // un-resolving the asker's `wait --owed`. Preserve the stronger status and
-    // its note; still stamp the read in history and `read_at`.
-    let preserve_status = status == "read" && receipt.status != "read";
-    if !preserve_status {
+    // A receipt status must never be silently downgraded: a weaker status that
+    // arrives later must not overwrite a stronger stored one, which would reopen
+    // a closed ask and un-resolve the asker's `wait --owed`. Two downgrades are
+    // guarded:
+    //   * a bare `read` marker (from re-reading or `watch` auto-read) must not
+    //     revert any explicit ack back to `read`; and
+    //   * a non-terminal ack (`received`/`accepted`/`working`/`blocked`) must not
+    //     revert a terminal `done`/`rejected` — so `ack working` after `done`
+    //     (directly or via `reply --ack`) is a no-op on the stored status.
+    // A deliberate terminal→terminal change (`done`→`rejected`) and any upgrade
+    // still apply. The `history`/`read_at` audit trail is stamped regardless.
+    let downgrade = (status == "read" && receipt.status != "read")
+        || (ask_is_terminal(&receipt.status) && !ask_is_terminal(status));
+    if !downgrade {
         receipt.status = status.to_string();
         receipt.note = note;
     }
@@ -3550,7 +3571,7 @@ fn write_receipt(
         receipt.read_at = Some(iso_now());
     }
     atomic_write_json(&path, &receipt)?;
-    Ok(())
+    Ok(receipt.status)
 }
 
 /// True when `message` is an open ask not yet discharged by every awaited agent

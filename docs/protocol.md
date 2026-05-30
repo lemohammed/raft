@@ -191,7 +191,10 @@ counts as an open ask if it lists `needs_response_from`, or if it set
 `requires_ack`. The ask is owed by each awaited agent (the `needs_response_from`
 set, or the recipients when only `requires_ack` is used) and closes for a given
 agent once that agent records a terminal receipt (`ack --status done` or
-`rejected`). `raft awaiting <agent>` reports the asks an agent owes and the
+`rejected`). A receipt status never downgrades: a later `read` never reverts an
+explicit ack, and a later non-terminal status never reverts a stored terminal
+`done`/`rejected`, so a closed ask cannot be silently reopened by a stray
+progress update. `raft awaiting <agent>` reports the asks an agent owes and the
 asks it is waiting on; `raft roster` aggregates per-agent `owes`/`waiting_on`
 counts alongside live presence.
 

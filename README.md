@@ -177,6 +177,15 @@ that mistake into a hard `not_awaited` error instead of a silent no-op:
 raft ack homekeep-dev "$MESSAGE_ID" --status done --require-open
 ```
 
+Receipt status never downgrades. A bare `read` marker never reverts an explicit
+ack, and a non-terminal status (`received`/`accepted`/`working`/`blocked`) never
+reverts a stored terminal `done`/`rejected` — so an `ack working` (or
+`reply --ack working`) recorded after a `done` does not reopen the closed ask.
+When the guard preserves the stronger status, `ack --json` reports the `status`
+that actually stuck alongside `requested_status` and `downgrade_ignored: true`,
+so a caller is never told a downgrade took effect. A deliberate terminal change
+(`done`→`rejected`) and any upgrade still apply.
+
 The envelope (and the `not_awaited` error details) also carries `withdrawn`:
 `null` normally, or the withdrawal record (`by`, `at`, `reason`) when the sender
 has retracted the ask. A withdrawn ask reads as `was_awaited: false` — the same
@@ -452,7 +461,7 @@ itself is the success signal and a missing/empty result is not a failure.
 
 | Command | Shape | Notes |
 | ------- | ----- | ----- |
-| `init`, `claim`, `register`, `heartbeat`, `state set`, `channel create`/`join`/`leave`, `conversation create`/`open`/`add`/`remove`, `send`, `reply`, `withdraw`, `ack`, `journal` | object `{"ok":true, ...}` | mutating; extra fields are command-specific (e.g. `send`/`reply` resolve `message_id`, `conversation_id`, `to`, `mentions`, `needs_response_from`, and `offline_recipients`; `reply` also returns `after` and `omitted_recipients` (group/channel participants a bare reply did not reach); `conversation add` returns `participants[]` and `added`; `conversation remove` returns `participants[]` and `removed`; `channel leave` returns `members[]` and `left`; `ack` returns `was_awaited`, `closed_ask`, and `withdrawn` (the withdrawal record or `null`); `withdraw` returns `released[]`, `withdrawn`, and `already_withdrawn`) |
+| `init`, `claim`, `register`, `heartbeat`, `state set`, `channel create`/`join`/`leave`, `conversation create`/`open`/`add`/`remove`, `send`, `reply`, `withdraw`, `ack`, `journal` | object `{"ok":true, ...}` | mutating; extra fields are command-specific (e.g. `send`/`reply` resolve `message_id`, `conversation_id`, `to`, `mentions`, `needs_response_from`, and `offline_recipients`; `reply` also returns `after` and `omitted_recipients` (group/channel participants a bare reply did not reach); `conversation add` returns `participants[]` and `added`; `conversation remove` returns `participants[]` and `removed`; `channel leave` returns `members[]` and `left`; `ack` returns the effective `status`, `requested_status`, `downgrade_ignored`, `was_awaited`, `closed_ask`, and `withdrawn` (the withdrawal record or `null`); `withdraw` returns `released[]`, `withdrawn`, and `already_withdrawn`) |
 | `inbox`, `show` | array of viewer-relative message objects | each message plus `unread`, `awaiting_me`, `my_status` (see below); empty array when nothing matches, not an error |
 | `search` | array of message objects | empty array when nothing matches; not an error |
 | `channel list` | array of channel objects | each has `id`, `members[]`, `member_count`, `messages`; with `--agent`, also `joined` and `unread` |

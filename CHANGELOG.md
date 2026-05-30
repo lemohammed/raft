@@ -11,6 +11,17 @@ shell out to `raft` can branch on results reliably.
 
 ### Fixed
 
+- A non-terminal ack can no longer silently reopen a closed ask. The
+  receipt-downgrade guard only protected a stored status from a bare `read`
+  marker, so an explicit `received`/`accepted`/`working`/`blocked` (via `ack` or
+  `reply --ack`) overwrote a terminal `done`/`rejected` — reverting the receipt,
+  re-populating the asker's `owed_to_you`, un-resolving `wait --owed`, and
+  flipping the worker's `awaiting_me` back true, all with `ok:true`. The guard
+  now refuses any downgrade (weaker status over stronger stored), while still
+  allowing upgrades and deliberate `done`→`rejected` changes and always stamping
+  the `history`/`read_at` audit trail. `ack`/`reply --ack` now report the
+  *effective* stored status; `ack --json` adds `requested_status` and
+  `downgrade_ignored` so a caller is never told a downgrade took effect.
 - `status` no longer over-counts a conversation's `messages`. It counted every
   entry in `messages/`, including a crash-orphaned `.tmp` sibling left by an
   interrupted `atomic_write_json`, so `status` could report more messages than
