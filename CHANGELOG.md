@@ -11,6 +11,15 @@ shell out to `raft` can branch on results reliably.
 
 ### Fixed
 
+- `wait <asker> --resolved <id>` no longer reports a multi-recipient ask as
+  resolved the instant the *first* awaited agent answers. For an ask delegated
+  to several agents (`--needs-response-from a,b` or a broadcast `--requires-ack`),
+  the blocking loop walked a snapshot of the open recipients and returned on the
+  first to record a terminal receipt — so an asker waiting on work owed by
+  `a,b` got back `{"resolved":{"awaited":"a","status":"done"}}` while `b` still
+  owed a reply. `--resolved <id>` now blocks until *every* awaited agent is
+  terminal and reports an aggregate status (`rejected` if any recipient rejected,
+  otherwise `done`); `wait --owed` keeps its first-to-close behavior.
 - `send --kind event` (and `receipt`) no longer accepts `--requires-ack` or
   `--needs-response-from`. Only `message` carries obligation semantics
   (protocol: "Only this kind may use `--needs-response-from`"), but the flags

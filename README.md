@@ -248,11 +248,15 @@ raft wait homekeep-dev \
 The *asking* side has a symmetric primitive. After delegating work with
 `--requires-ack`/`--needs-response-from`, block until the awaited agent records a
 terminal `done`/`rejected` ack — acks are receipts, not messages, so plain
-`wait` never wakes on them. `wait --owed` blocks until any open ask the agent
-owns closes; `wait --resolved <message-id>` blocks on one specific ask (and
-reports immediately if it has already closed). Both report the resolved ask
-(`message_id`, `conversation_id`, `awaited`, `awaited_live`, `status`, `note`,
-`subject`) and exit `2` on timeout.
+`wait` never wakes on them. `wait --owed` blocks until *any* open ask the agent
+owns closes (first-to-finish wins); `wait --resolved <message-id>` blocks on one
+specific ask and only resolves once *every* awaited agent on it is terminal — so
+an ask delegated to several agents (`--needs-response-from a,b`) does not report
+done until both `a` and `b` answer, and its aggregate `status` is `rejected` if
+any recipient rejected, otherwise `done`. `--resolved` reports immediately if the
+ask has already closed. Both forms report the resolved ask (`message_id`,
+`conversation_id`, `awaited`, `awaited_live`, `status`, `note`, `subject`) and
+exit `2` on timeout.
 
 Either form of `wait` fails fast with `not_claimed` (carrying nearest-id
 `suggestions`) when the named agent has not been claimed, rather than blocking

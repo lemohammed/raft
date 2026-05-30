@@ -3336,6 +3336,51 @@ fn wait_owed_blocks_until_an_owed_ask_closes() {
 }
 
 #[test]
+fn wait_resolved_blocks_until_every_recipient_answers() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(&bus, &["claim", "alice", "--workspace", "."]);
+    run(&bus, &["claim", "bob", "--workspace", "."]);
+    run(&bus, &["claim", "carol", "--workspace", "."]);
+    run(
+        &bus,
+        &[
+            "conversation", "create", "c", "--participants", "alice,bob,carol",
+            "--starter", "alice",
+        ],
+    );
+    let sent = run(
+        &bus,
+        &[
+            "send", "--conversation", "c", "--from", "alice", "--to", "bob,carol",
+            "--subject", "Q", "--body", "both please", "--needs-response-from", "bob,carol",
+            "--json",
+        ],
+    );
+    let mid = serde_json::from_slice::<serde_json::Value>(&sent.stdout).unwrap()["message_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // Only bob has answered. `--resolved <id>` must NOT report the ask done
+    // while carol still owes a reply; it blocks and then times out.
+    run(&bus, &["ack", "bob", &mid, "--status", "done", "--note", "bob ok"]);
+    let partial = run_fail(&bus, &["wait", "alice", "--resolved", &mid, "--timeout", "1", "--json"]);
+    let partial_json: serde_json::Value = serde_json::from_slice(&partial.stderr).unwrap();
+    assert_eq!(
+        partial_json["error"]["code"], "timeout",
+        "wait --resolved must keep blocking until every awaited agent is terminal"
+    );
+
+    // Once carol also answers, the ask resolves.
+    run(&bus, &["ack", "carol", &mid, "--status", "done", "--note", "carol ok"]);
+    let done = run(&bus, &["wait", "alice", "--resolved", &mid, "--timeout", "2", "--json"]);
+    let done_json: serde_json::Value = serde_json::from_slice(&done.stdout).unwrap();
+    assert_eq!(done_json["ok"], true);
+    assert_eq!(done_json["resolved"]["status"], "done");
+}
+
+#[test]
 fn wait_resolution_rejects_unknown_and_unowned_asks() {
     let bus = temp_bus();
     run(&bus, &["init"]);

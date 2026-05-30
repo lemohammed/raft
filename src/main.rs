@@ -2123,13 +2123,48 @@ fn cmd_wait_resolution(root: &Path, agent_id: &str, args: &WaitArgs) -> Result<(
     let waker = Waker::new(&[&root.join("conversations")]);
     let interval = Duration::from_secs_f64(args.interval);
     loop {
-        for ask in &pending {
-            if let Some((status, note)) =
-                read_terminal_status(root, &ask.conversation_id, &ask.message_id, &ask.awaited)?
-            {
-                let mut resolved = ask.clone();
-                resolved.status = status;
-                return emit_resolution(args, Some((resolved, note)));
+        if target.is_some() {
+            // `--resolved <id>` targets one ask, which may owe several agents. It
+            // is only resolved once every awaited agent has a terminal receipt;
+            // returning on the first would falsely report the ask done while
+            // others still owe a reply.
+            let mut terminal: Vec<(OpenAsk, Option<String>)> = Vec::with_capacity(pending.len());
+            for ask in &pending {
+                match read_terminal_status(
+                    root,
+                    &ask.conversation_id,
+                    &ask.message_id,
+                    &ask.awaited,
+                )? {
+                    Some((status, note)) => {
+                        let mut resolved = ask.clone();
+                        resolved.status = status;
+                        terminal.push((resolved, note));
+                    }
+                    None => break,
+                }
+            }
+            if terminal.len() == pending.len() {
+                // Aggregate across recipients: a single rejection rejects the
+                // ask; otherwise report the last agent to finish.
+                let chosen = terminal
+                    .iter()
+                    .find(|(ask, _)| ask.status == "rejected")
+                    .cloned()
+                    .or_else(|| terminal.last().cloned());
+                return emit_resolution(args, chosen);
+            }
+        } else {
+            // `--owed` blocks on the whole owed set; the first ask to reach a
+            // terminal receipt unblocks the caller.
+            for ask in &pending {
+                if let Some((status, note)) =
+                    read_terminal_status(root, &ask.conversation_id, &ask.message_id, &ask.awaited)?
+                {
+                    let mut resolved = ask.clone();
+                    resolved.status = status;
+                    return emit_resolution(args, Some((resolved, note)));
+                }
             }
         }
         let remaining = deadline.saturating_duration_since(Instant::now());
