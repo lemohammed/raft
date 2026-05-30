@@ -11,6 +11,16 @@ shell out to `raft` can branch on results reliably.
 
 ### Fixed
 
+- `send --kind event` (and `receipt`) no longer accepts `--requires-ack` or
+  `--needs-response-from`. Only `message` carries obligation semantics
+  (protocol: "Only this kind may use `--needs-response-from`"), but the flags
+  were stored verbatim on any kind and `gather_open_asks` let `event` fall
+  through into ask accounting — so an IM bridge relaying a human as an `event`
+  fabricated a real open ask (`awaiting`/`me`/`roster`/`status`/`wait --owed`
+  all reported it) that the bridge agent, which never runs `ack`, could never
+  close. `send` now rejects these flags on non-`message` kinds, and
+  `message_awaited` (the chokepoint for every ask-accounting path) treats any
+  non-`message` row as opening no ask, disarming legacy events already on disk.
 - Removing an agent from a room (`conversation remove` / `channel leave`) now
   releases any open ask still awaiting them. A removed agent cannot ack or reply
   (`write_receipt`/`send` reject non-participants), but the ask stayed open and

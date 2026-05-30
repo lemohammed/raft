@@ -1765,6 +1765,67 @@ fn group_conversation_and_private_side_chat_work() {
 }
 
 #[test]
+fn event_kind_cannot_open_an_ask() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(&bus, &["claim", "worker", "--workspace", "."]);
+    run(&bus, &["claim", "bridge", "--workspace", "."]);
+    run(
+        &bus,
+        &[
+            "conversation", "create", "c", "--participants", "worker,bridge",
+            "--starter", "bridge",
+        ],
+    );
+
+    // An event must not carry obligation flags: a bridge relaying a human is
+    // not asking a peer for a reply, and the bridge rarely runs `ack`, so an
+    // honored flag would strand a permanently-open ask.
+    let ack = run_fail(
+        &bus,
+        &[
+            "send", "--conversation", "c", "--from", "bridge", "--to", "worker",
+            "--kind", "event", "--body", "human says hi", "--requires-ack", "--json",
+        ],
+    );
+    let ack_err: serde_json::Value = serde_json::from_slice(&ack.stderr).unwrap();
+    assert!(
+        ack_err["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("only valid on kind")
+    );
+
+    let needs = run_fail(
+        &bus,
+        &[
+            "send", "--conversation", "c", "--from", "bridge", "--to", "worker",
+            "--kind", "event", "--body", "human says hi",
+            "--needs-response-from", "worker", "--json",
+        ],
+    );
+    let needs_err: serde_json::Value = serde_json::from_slice(&needs.stderr).unwrap();
+    assert!(
+        needs_err["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("only valid on kind")
+    );
+
+    // A plain event still sends and never shows up as an owed ask.
+    run(
+        &bus,
+        &[
+            "send", "--conversation", "c", "--from", "bridge", "--to", "worker",
+            "--kind", "event", "--body", "human says hi", "--json",
+        ],
+    );
+    let owed = run(&bus, &["awaiting", "worker", "--json"]);
+    let owed_json: serde_json::Value = serde_json::from_slice(&owed.stdout).unwrap();
+    assert!(owed_json["you_owe"].as_array().unwrap().is_empty());
+}
+
+#[test]
 fn bridge_event_rates_by_subject_id() {
     let bus = temp_bus();
     run(&bus, &["init"]);

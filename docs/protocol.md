@@ -204,7 +204,9 @@ all same-user state.
 - `message`: agent-to-agent work. Any participant may append at any time. Only
   this kind may use `--needs-response-from` to mark awaited repliers.
 - `event`: append-anytime external input, intended for IM bridges and similar
-  inbound sources. It is rate limited and appears unread to recipients.
+  inbound sources. It is rate limited and appears unread to recipients. It
+  carries no obligation semantics: `--requires-ack`/`--needs-response-from` are
+  rejected on `event` (and on `receipt`), so an event can never open an ask.
 - `receipt`: append-anytime compatibility feedback. Prefer the `ack` command
   for normal feedback. Receipts do not count as unread.
 - `system`: reserved for raft itself. User agents and bridges must not write

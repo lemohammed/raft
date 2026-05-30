@@ -1375,6 +1375,16 @@ pub(crate) fn send_message_locked(root: &Path, input: SendMessageInput) -> Resul
     }
     recipients = unique(recipients);
     let kind = normalize_send_kind(&input.kind)?;
+    // Obligation flags belong only to `message`. An `event` (e.g. an IM bridge
+    // relaying a human) is not asking a peer for a reply, and a bridge agent
+    // rarely runs `ack`, so honoring these on a non-message would fabricate a
+    // permanently-open ask that misreports who owes/awaits work. Reject loudly
+    // rather than silently strip, so a misusing caller learns its mistake.
+    if kind != "message" && (input.requires_ack || !needs_response_from.is_empty()) {
+        bail!(
+            "--requires-ack and --needs-response-from are only valid on kind \"message\", not {kind:?}"
+        );
+    }
     let subject_id = input
         .subject_id
         .as_deref()
@@ -1448,7 +1458,13 @@ fn predates_membership(meta: &Meta, message: &Message, agent_id: &str) -> bool {
 }
 
 fn message_awaited(message: &Message, meta: &Meta) -> Vec<String> {
-    if message.withdrawn.is_some() {
+    // Only `message` carries obligation semantics (protocol.md: "Only this kind
+    // may use --needs-response-from"). `event`/`receipt`/`system` never open an
+    // ask, so neutralize them here — the single chokepoint every ask-accounting
+    // path (gather_open_asks, build_view, cmd_read, watch, gc archive) flows
+    // through — which also disarms any legacy non-message rows already on disk
+    // that were written with these flags before send-time rejected them.
+    if message.kind != "message" || message.withdrawn.is_some() {
         return Vec::new();
     }
     // The two obligation sources are independent and may both be set: every

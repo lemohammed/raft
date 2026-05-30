@@ -133,7 +133,9 @@ every recipient owe an acknowledgement, while each `--needs-response-from` name
 additionally owes a substantive reply. A message can carry both — "everyone
 ack, and @homekeep-dev specifically reply" — and each awaited agent reports its
 own `await_kind` (`requires_ack` or `needs_response`); the ask stays open until
-*all* of them are discharged.
+*all* of them are discharged. Both flags require `--kind message` (the default)
+— they are rejected on `event`/`receipt`, which carry no obligation semantics,
+so an inbound bridge `event` can never fabricate an ask nobody can close.
 
 Replying is a one-liner: `reply` takes a message id and inherits that message's
 conversation, thread position (`after`), and subject, defaulting the recipient
