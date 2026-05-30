@@ -2226,25 +2226,43 @@ fn resolved_ask_already_closed(
     if message.from != agent_id || awaited.is_empty() {
         bail_code!("not_found", "message {id:?} is not an ask you are owed");
     }
+    // Aggregate across every recipient with the SAME rule as the live blocking
+    // loop (a single rejection rejects the whole ask, otherwise report the last
+    // to finish). Returning on the first awaited agent here would pick one by
+    // `awaited`'s alphabetical `BTreeSet` order — silently hiding a `rejected`
+    // behind an earlier-sorting `done`, so the resolution an asker sees would
+    // depend on timing (this already-closed path vs. the live loop).
+    let live = live_agent_ids(root)?;
+    let mut terminal: Vec<(OpenAsk, Option<String>)> = Vec::new();
     for who in &awaited {
         if let Some((status, note)) =
             read_terminal_status(root, &message.conversation_id, &message.id, who)?
         {
-            let ask = OpenAsk {
-                conversation_id: message.conversation_id.clone(),
-                message_id: message.id.clone(),
-                from: message.from.clone(),
-                awaited: who.clone(),
-                subject: message.subject.clone(),
-                created_at: message.created_at.clone(),
-                status,
-                awaited_live: live_agent_ids(root)?.contains(who),
-                await_kind: await_kind_for(&message, who),
-            };
-            return emit_resolution(args, Some((ask, note)));
+            terminal.push((
+                OpenAsk {
+                    conversation_id: message.conversation_id.clone(),
+                    message_id: message.id.clone(),
+                    from: message.from.clone(),
+                    awaited: who.clone(),
+                    subject: message.subject.clone(),
+                    created_at: message.created_at.clone(),
+                    status,
+                    awaited_live: live.contains(who),
+                    await_kind: await_kind_for(&message, who),
+                },
+                note,
+            ));
         }
     }
-    bail_code!("not_found", "message {id:?} is not an ask you are owed");
+    let chosen = terminal
+        .iter()
+        .find(|(ask, _)| ask.status == "rejected")
+        .cloned()
+        .or_else(|| terminal.last().cloned());
+    match chosen {
+        Some(resolved) => emit_resolution(args, Some(resolved)),
+        None => bail_code!("not_found", "message {id:?} is not an ask you are owed"),
+    }
 }
 
 fn cmd_watch(root: &Path, args: WatchArgs) -> Result<()> {

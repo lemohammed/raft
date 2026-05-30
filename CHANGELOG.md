@@ -11,6 +11,14 @@ shell out to `raft` can branch on results reliably.
 
 ### Fixed
 
+- `wait --resolved <id>` on an *already fully-resolved* multi-recipient ask now
+  applies the same rejection-priority aggregation as the live blocking loop.
+  When every recipient was already terminal at call time, the already-closed
+  fallback returned the first awaited agent in alphabetical order, so `bob done`
+  + `carol rejected` reported `done` and silently hid the rejection — while the
+  identical call against a still-open ask correctly reported `rejected`, making
+  the result depend on timing the asker cannot see. The fallback now reports
+  `rejected` if any recipient rejected, otherwise the last to finish.
 - A non-terminal ack can no longer silently reopen a closed ask. The
   receipt-downgrade guard only protected a stored status from a bare `read`
   marker, so an explicit `received`/`accepted`/`working`/`blocked` (via `ack` or

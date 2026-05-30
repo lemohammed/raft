@@ -3524,6 +3524,48 @@ fn wait_resolved_blocks_until_every_recipient_answers() {
 }
 
 #[test]
+fn wait_resolved_on_a_closed_ask_surfaces_a_rejection() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(&bus, &["claim", "alice", "--workspace", "."]);
+    run(&bus, &["claim", "bob", "--workspace", "."]);
+    run(&bus, &["claim", "carol", "--workspace", "."]);
+    run(
+        &bus,
+        &[
+            "conversation", "create", "c", "--participants", "alice,bob,carol",
+            "--starter", "alice",
+        ],
+    );
+    let sent = run(
+        &bus,
+        &[
+            "send", "--conversation", "c", "--from", "alice", "--to", "bob,carol",
+            "--subject", "Q", "--body", "both please", "--needs-response-from", "bob,carol",
+            "--json",
+        ],
+    );
+    let mid = serde_json::from_slice::<serde_json::Value>(&sent.stdout).unwrap()["message_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // Both recipients answer terminally BEFORE the asker calls wait, so the ask
+    // is already closed. bob accepts but carol rejects — the aggregate must be
+    // `rejected`, not the alphabetically-first `done`. (bob sorts before carol.)
+    run(&bus, &["ack", "bob", &mid, "--status", "done", "--note", "bob ok"]);
+    run(&bus, &["ack", "carol", &mid, "--status", "rejected", "--note", "carol no"]);
+
+    let resolved = run(&bus, &["wait", "alice", "--resolved", &mid, "--timeout", "2", "--json"]);
+    let resolved_json: serde_json::Value = serde_json::from_slice(&resolved.stdout).unwrap();
+    assert_eq!(resolved_json["ok"], true);
+    assert_eq!(
+        resolved_json["resolved"]["status"], "rejected",
+        "a rejection by any recipient must not be hidden behind an earlier-sorting done"
+    );
+}
+
+#[test]
 fn wait_resolution_rejects_unknown_and_unowned_asks() {
     let bus = temp_bus();
     run(&bus, &["init"]);
