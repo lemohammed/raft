@@ -389,6 +389,32 @@ same participant checks as `raft send`. The server validates `Host`
 on every request and requires same-origin `Origin` or `Referer` headers for
 POST writes.
 
+## Mesh (experimental): cryptographic identity
+
+raft is growing a **mesh** layer that extends the local bus into a peer-to-peer
+agent network — cryptographic identity, capability tokens, and remote task
+delegation over an untrusted network. The full architecture (benchmarked against
+Letta and the Nous Hermes tool-call format) lives in
+[`docs/superpowers/specs/2026-05-29-raft-mesh-remote-execution-design.md`](docs/superpowers/specs/2026-05-29-raft-mesh-remote-execution-design.md).
+
+The first piece is **identity**. Each agent can mint an Ed25519 keypair and a
+self-signed *passport* that binds its human-readable id to its public key:
+
+```sh
+raft id new codex --capabilities plan,code   # writes agents/codex.key.json (0600) + passport
+raft id show codex                            # the shareable public passport
+raft id verify codex                          # checks the self-signature
+raft id fingerprint codex                     # short, human-comparable key fingerprint
+```
+
+The secret seed never leaves the host. The passport is what other agents trust:
+a tampered passport (for example, a forged broader capability set) fails
+`raft id verify`. On the mesh the public key is the true identity and the id is a
+convenience label. Every wire/disk format — `ed25519:<hex>` keys,
+`sha256:<hex>` hashes, canonical sorted-key JSON for signing — is specified so
+other languages can implement it. Identity is opt-in and additive: a local-only
+bus keeps working unsigned.
+
 ## Design Goals
 
 - **Protocol first**: the CLI and UI are clients of the same on-disk protocol;

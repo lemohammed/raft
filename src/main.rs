@@ -1,7 +1,9 @@
 #[macro_use]
 mod error;
 mod cli;
+mod crypto;
 mod doctor;
+mod identity;
 mod storage;
 mod types;
 mod ui;
@@ -121,6 +123,12 @@ fn command_wants_json(command: &Commands) -> bool {
         Commands::Journal(args) => args.json,
         Commands::Status(args) => args.json,
         Commands::Doctor(args) => args.json,
+        Commands::Id { command } => match command {
+            IdCommand::New(args) => args.json,
+            IdCommand::Show(args) => args.json,
+            IdCommand::Verify(args) => args.json,
+            IdCommand::Fingerprint(args) => args.json,
+        },
         _ => false,
     }
 }
@@ -168,7 +176,147 @@ fn run(root: PathBuf, command: Commands) -> Result<()> {
         Commands::Gc(args) => cmd_gc(&root, args),
         Commands::Serve(args) => cmd_serve(&root, args),
         Commands::Ui(args) => cmd_ui(&root, args),
+        Commands::Id { command } => match command {
+            IdCommand::New(args) => cmd_id_new(&root, args),
+            IdCommand::Show(args) => cmd_id_show(&root, args),
+            IdCommand::Verify(args) => cmd_id_verify(&root, args),
+            IdCommand::Fingerprint(args) => cmd_id_fingerprint(&root, args),
+        },
     }
+}
+
+/// `raft id new` — mint an Ed25519 keypair + self-signed passport for an agent.
+fn cmd_id_new(root: &Path, args: IdNewArgs) -> Result<()> {
+    let agent_id = validate_id(&args.agent, "agent id")?;
+    ensure_root(root)?;
+    let capabilities = match &args.capabilities {
+        Some(raw) => split_csv(raw)?,
+        None => Vec::new(),
+    };
+    let passport = identity::create_identity(root, &agent_id, &capabilities)?;
+    if args.json {
+        emit_ok(serde_json::json!({
+            "agent": agent_id,
+            "pubkey": passport.pubkey,
+            "fingerprint": fingerprint(&passport.pubkey),
+            "capabilities": passport.capabilities,
+            "issued_at": passport.issued_at,
+        }))?;
+    } else {
+        println!(
+            "minted identity for @{agent_id}\n  pubkey      {}\n  fingerprint {}",
+            passport.pubkey,
+            fingerprint(&passport.pubkey)
+        );
+    }
+    Ok(())
+}
+
+/// `raft id show` — print an agent's passport (shareable public identity).
+fn cmd_id_show(root: &Path, args: IdShowArgs) -> Result<()> {
+    let agent_id = validate_id(&args.agent, "agent id")?;
+    ensure_root(root)?;
+    let passport = identity::load_passport(root, &agent_id)?.ok_or_else(|| {
+        RaftError::coded("not_found", format!("no identity for {agent_id:?}; run `raft id new`"))
+    })?;
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&passport)?);
+    } else {
+        println!(
+            "@{} {}\n  fingerprint {}\n  capabilities {}\n  issued_at {}",
+            passport.id,
+            passport.pubkey,
+            fingerprint(&passport.pubkey),
+            if passport.capabilities.is_empty() {
+                "(none)".to_string()
+            } else {
+                passport.capabilities.join(", ")
+            },
+            passport.issued_at,
+        );
+    }
+    Ok(())
+}
+
+/// `raft id verify` — verify a passport's self-signature, by agent id or file.
+fn cmd_id_verify(root: &Path, args: IdVerifyArgs) -> Result<()> {
+    let passport = match (&args.agent, &args.file) {
+        (Some(_), Some(_)) => {
+            bail!("pass either an agent id or --file, not both");
+        }
+        (None, None) => {
+            bail!("pass an agent id or --file to verify");
+        }
+        (Some(agent), None) => {
+            let agent_id = validate_id(agent, "agent id")?;
+            ensure_root(root)?;
+            identity::load_passport(root, &agent_id)?.ok_or_else(|| {
+                RaftError::coded(
+                    "not_found",
+                    format!("no identity for {agent_id:?}; run `raft id new`"),
+                )
+            })?
+        }
+        (None, Some(path)) => read_json::<identity::Passport>(path)?
+            .ok_or_else(|| RaftError::coded("not_found", format!("no such file: {}", path.display())))?,
+    };
+    let result = passport.verify();
+    if args.json {
+        match &result {
+            Ok(()) => emit_ok(serde_json::json!({
+                "id": passport.id,
+                "pubkey": passport.pubkey,
+                "fingerprint": fingerprint(&passport.pubkey),
+                "verified": true,
+            }))?,
+            Err(err) => {
+                return Err(RaftError::coded("error", err.message.clone()).with_details(
+                    serde_json::json!({ "id": passport.id, "verified": false }),
+                ));
+            }
+        }
+    } else {
+        match &result {
+            Ok(()) => println!("ok: @{} passport verifies ({})", passport.id, passport.pubkey),
+            Err(err) => return Err(RaftError::coded("error", err.message.clone())),
+        }
+    }
+    Ok(())
+}
+
+/// `raft id fingerprint` — print the short public-key fingerprint for an agent.
+fn cmd_id_fingerprint(root: &Path, args: IdFingerprintArgs) -> Result<()> {
+    let agent_id = validate_id(&args.agent, "agent id")?;
+    ensure_root(root)?;
+    let passport = identity::load_passport(root, &agent_id)?.ok_or_else(|| {
+        RaftError::coded("not_found", format!("no identity for {agent_id:?}; run `raft id new`"))
+    })?;
+    let fingerprint = fingerprint(&passport.pubkey);
+    if args.json {
+        emit_ok(serde_json::json!({
+            "agent": agent_id,
+            "pubkey": passport.pubkey,
+            "fingerprint": fingerprint,
+        }))?;
+    } else {
+        println!("{fingerprint}");
+    }
+    Ok(())
+}
+
+/// A short, human-comparable fingerprint of a public key: the first 16 hex chars
+/// of `sha256(pubkey-string)`, grouped for readability. Enough to eyeball that
+/// two agents mean the same key; the full pubkey remains the authority.
+fn fingerprint(pubkey: &str) -> String {
+    let digest = crypto::sha256_hex(pubkey.as_bytes());
+    let hex = digest.strip_prefix("sha256:").unwrap_or(&digest);
+    let short = &hex[..hex.len().min(16)];
+    short
+        .as_bytes()
+        .chunks(4)
+        .map(|chunk| std::str::from_utf8(chunk).unwrap_or(""))
+        .collect::<Vec<_>>()
+        .join("-")
 }
 
 fn root_path(root: Option<PathBuf>) -> Result<PathBuf> {

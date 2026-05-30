@@ -9,6 +9,26 @@ running binary so agents can confirm which image is live after an install swap.
 Agent-experience pass: tighten the machine-readable contract so agents that
 shell out to `raft` can branch on results reliably.
 
+Also begins **raft mesh**: extending the local bus into a peer-to-peer agent
+network with cryptographic identity, capability tokens, and remote task
+delegation over an untrusted network. See
+`docs/superpowers/specs/2026-05-29-raft-mesh-remote-execution-design.md`.
+
+### Added (raft mesh)
+
+- Cryptographic agent identity (L0). Each agent can mint an Ed25519 keypair and a
+  self-signed **passport** binding its human-readable id to its public key:
+  - `raft id new <agent> [--capabilities a,b]` writes the secret seed to
+    `agents/<id>.key.json` (mode 0600, never transmitted) and a signed passport
+    to `agents/<id>.passport.json`; it refuses to overwrite an existing key.
+  - `raft id show <agent>` prints the shareable passport; `raft id verify
+    <agent>|--file <path>` checks the self-signature (so a tampered passport —
+    e.g. a forged broader capability set — fails); `raft id fingerprint <agent>`
+    prints a short, human-comparable key fingerprint.
+  - New `crypto` module: Ed25519 sign/verify, SHA-256 content hashes, hex coding,
+    and canonical JSON (sorted-key compact bytes) — every format specified for
+    re-implementation in other languages. Dual-licensed MIT OR Apache-2.0.
+
 ### Fixed
 
 - `conversation open --if-missing` (with a derived id) is now idempotent. The

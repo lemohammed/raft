@@ -4778,3 +4778,68 @@ fn an_ask_can_require_a_reply_from_one_agent_and_an_ack_from_everyone() {
     let done_json: serde_json::Value = serde_json::from_slice(&done.stdout).unwrap();
     assert!(done_json["owed_to_you"].as_array().unwrap().is_empty());
 }
+
+#[test]
+fn identity_mint_show_verify_and_fingerprint() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+
+    // Mint a fresh identity with capabilities.
+    let new = run(&bus, &["id", "new", "alice", "--capabilities", "plan,code", "--json"]);
+    let new_json: serde_json::Value = serde_json::from_slice(&new.stdout).unwrap();
+    assert_eq!(new_json["ok"], true);
+    let pubkey = new_json["pubkey"].as_str().unwrap();
+    assert!(pubkey.starts_with("ed25519:"), "pubkey must be ed25519-prefixed");
+    assert_eq!(
+        new_json["capabilities"].as_array().unwrap(),
+        &vec![serde_json::json!("plan"), serde_json::json!("code")]
+    );
+    let fingerprint = new_json["fingerprint"].as_str().unwrap().to_string();
+    assert!(!fingerprint.is_empty());
+
+    // show returns the shareable passport, carrying the self-signature.
+    let show = run(&bus, &["id", "show", "alice", "--json"]);
+    let passport: serde_json::Value = serde_json::from_slice(&show.stdout).unwrap();
+    assert_eq!(passport["id"], "alice");
+    assert_eq!(passport["pubkey"], pubkey);
+    assert!(passport["sig"].as_str().is_some(), "passport must be signed");
+
+    // verify confirms the self-signature.
+    let verify = run(&bus, &["id", "verify", "alice", "--json"]);
+    let verify_json: serde_json::Value = serde_json::from_slice(&verify.stdout).unwrap();
+    assert_eq!(verify_json["verified"], true);
+
+    // fingerprint is stable and matches what `new` reported.
+    let fp = run(&bus, &["id", "fingerprint", "alice"]);
+    assert_eq!(String::from_utf8_lossy(&fp.stdout).trim(), fingerprint);
+
+    // Minting again must not silently overwrite an existing key.
+    let dup = run_fail(&bus, &["id", "new", "alice", "--json"]);
+    let dup_json: serde_json::Value = serde_json::from_slice(&dup.stderr).unwrap();
+    assert_eq!(dup_json["error"]["code"], "conflict");
+}
+
+#[test]
+fn identity_verify_detects_a_tampered_passport() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(&bus, &["id", "new", "bob", "--json"]);
+
+    // Tamper with the passport on disk: grant bob an extra capability without
+    // re-signing. The self-signature must no longer verify.
+    let path = bus.join("agents/bob.passport.json");
+    let mut passport: serde_json::Value =
+        serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    passport["capabilities"] = serde_json::json!(["admin"]);
+    fs::write(&path, serde_json::to_vec_pretty(&passport).unwrap()).unwrap();
+
+    let verify = run_fail(&bus, &["id", "verify", "bob", "--json"]);
+    let verify_json: serde_json::Value = serde_json::from_slice(&verify.stderr).unwrap();
+    assert_eq!(verify_json["ok"], false);
+    assert_eq!(verify_json["error"]["verified"], false);
+
+    // Verifying an arbitrary passport file works the same way.
+    let file_verify = run_fail(&bus, &["id", "verify", "--file", path.to_str().unwrap(), "--json"]);
+    let file_json: serde_json::Value = serde_json::from_slice(&file_verify.stderr).unwrap();
+    assert_eq!(file_json["error"]["verified"], false);
+}

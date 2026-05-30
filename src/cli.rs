@@ -121,6 +121,65 @@ pub(crate) enum Commands {
     Serve(ServeArgs),
     /// Serve the local web UI for an agent.
     Ui(UiArgs),
+    /// Manage an agent's cryptographic identity (Ed25519 keypair + passport).
+    Id {
+        #[command(subcommand)]
+        command: IdCommand,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum IdCommand {
+    /// Generate a new keypair and self-signed passport for an agent.
+    New(IdNewArgs),
+    /// Print an agent's passport (its shareable public identity).
+    Show(IdShowArgs),
+    /// Verify a passport's self-signature (by id on this bus, or a file).
+    Verify(IdVerifyArgs),
+    /// Print an agent's short public-key fingerprint.
+    Fingerprint(IdFingerprintArgs),
+}
+
+#[derive(Args)]
+pub(crate) struct IdNewArgs {
+    /// Agent id to mint an identity for.
+    pub(crate) agent: String,
+    /// Comma-separated capability tags to record in the passport.
+    #[arg(long)]
+    pub(crate) capabilities: Option<String>,
+    /// Emit machine-readable JSON instead of text.
+    #[arg(long)]
+    pub(crate) json: bool,
+}
+
+#[derive(Args)]
+pub(crate) struct IdShowArgs {
+    /// Agent id whose passport to print.
+    pub(crate) agent: String,
+    /// Emit machine-readable JSON instead of text.
+    #[arg(long)]
+    pub(crate) json: bool,
+}
+
+#[derive(Args)]
+pub(crate) struct IdVerifyArgs {
+    /// Agent id whose stored passport to verify.
+    pub(crate) agent: Option<String>,
+    /// Verify a passport JSON file instead of a stored agent passport.
+    #[arg(long)]
+    pub(crate) file: Option<PathBuf>,
+    /// Emit machine-readable JSON instead of text.
+    #[arg(long)]
+    pub(crate) json: bool,
+}
+
+#[derive(Args)]
+pub(crate) struct IdFingerprintArgs {
+    /// Agent id whose fingerprint to print.
+    pub(crate) agent: String,
+    /// Emit machine-readable JSON instead of text.
+    #[arg(long)]
+    pub(crate) json: bool,
 }
 
 #[derive(Args)]
