@@ -35,6 +35,10 @@ run/bus/
       receipts/
         MESSAGE_ID/
           AGENT_ID.json
+      streams/
+        MESSAGE_ID.log # task stdout/stderr/exit stream
+  artifacts/
+    sha256-<hex>       # content-addressed task output blobs
   journal/
     codex.jsonl
   heartbeat/

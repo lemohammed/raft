@@ -30,6 +30,7 @@ use std::env;
 use std::ffi::OsStr;
 use std::fs;
 use std::io::{self, Write};
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process;
 use std::sync::Arc;
@@ -594,6 +595,8 @@ fn run_pending_tasks(
                     Some(err.message),
                     None,
                     false,
+                    Vec::new(),
+                    None,
                 )?;
                 processed += 1;
                 continue;
@@ -614,6 +617,8 @@ fn run_pending_tasks(
                     Some("capability holder is not this worker".to_string()),
                     None,
                     false,
+                    Vec::new(),
+                    None,
                 )?;
                 processed += 1;
                 continue;
@@ -637,6 +642,8 @@ fn run_pending_tasks(
                     Some(format!("unauthorized: {}", err.message)),
                     None,
                     false,
+                    Vec::new(),
+                    None,
                 )?;
                 processed += 1;
                 continue;
@@ -652,6 +659,8 @@ fn run_pending_tasks(
                 Some("task carries no capability but a trusted root is required".to_string()),
                 None,
                 false,
+                Vec::new(),
+                None,
             )?;
             processed += 1;
             continue;
@@ -666,6 +675,8 @@ fn run_pending_tasks(
                 Some(format!("unknown tool {:?}", body.tool_call.name)),
                 None,
                 false,
+                Vec::new(),
+                None,
             )?;
             processed += 1;
             continue;
@@ -692,6 +703,8 @@ fn run_pending_tasks(
                     Some(err.message),
                     None,
                     false,
+                    Vec::new(),
+                    None,
                 )?;
                 processed += 1;
                 continue;
@@ -728,6 +741,14 @@ fn run_pending_tasks(
         } else {
             None
         };
+        let mut artifacts = Vec::new();
+        if let Some(artifact) = persist_task_artifact(root, "stdout", outcome.stdout.as_bytes())? {
+            artifacts.push(artifact);
+        }
+        if let Some(artifact) = persist_task_artifact(root, "stderr", outcome.stderr.as_bytes())? {
+            artifacts.push(artifact);
+        }
+        let log = Some(persist_task_log(root, &message, &outcome)?);
         record_task_outcome(
             root,
             worker,
@@ -737,10 +758,84 @@ fn run_pending_tasks(
             error,
             outcome.exit_code,
             outcome.truncated,
+            artifacts,
+            log,
         )?;
         processed += 1;
     }
     Ok(processed)
+}
+
+fn persist_task_artifact(
+    root: &Path,
+    name: &str,
+    bytes: &[u8],
+) -> Result<Option<task::TaskArtifact>> {
+    if bytes.is_empty() {
+        return Ok(None);
+    }
+    let hash = crypto::sha256_hex(bytes);
+    let hash_hex = hash.strip_prefix("sha256:").unwrap_or(&hash);
+    let relative = format!("artifacts/sha256-{hash_hex}");
+    let path = root.join(&relative);
+    if !path.exists() {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+            set_dir_private(parent)?;
+        }
+        fs::write(&path, bytes)?;
+    }
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
+    Ok(Some(task::TaskArtifact {
+        name: name.to_string(),
+        hash,
+        path: relative,
+        bytes: bytes.len() as u64,
+    }))
+}
+
+fn persist_task_log(
+    root: &Path,
+    task_message: &Message,
+    outcome: &task::ToolOutcome,
+) -> Result<String> {
+    let relative = format!(
+        "conversations/{}/streams/{}.log",
+        task_message.conversation_id, task_message.id
+    );
+    let path = root.join(&relative);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+        set_dir_private(parent)?;
+    }
+    let mut log = String::new();
+    if !outcome.stdout.is_empty() {
+        log.push_str("[stdout] ");
+        log.push_str(&outcome.stdout);
+        if !outcome.stdout.ends_with('\n') {
+            log.push('\n');
+        }
+    }
+    if !outcome.stderr.is_empty() {
+        log.push_str("[stderr] ");
+        log.push_str(&outcome.stderr);
+        if !outcome.stderr.ends_with('\n') {
+            log.push('\n');
+        }
+    }
+    if outcome.timed_out {
+        log.push_str("[timeout]\n");
+    }
+    log.push_str(&format!(
+        "[exit] {}\n",
+        outcome
+            .exit_code
+            .map(|code| code.to_string())
+            .unwrap_or_else(|| "killed".to_string())
+    ));
+    fs::write(&path, log)?;
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
+    Ok(relative)
 }
 
 /// Deliver a task's result as a reply and close the obligation with a terminal
@@ -755,6 +850,8 @@ fn record_task_outcome(
     error: Option<String>,
     exit_code: Option<i32>,
     truncated: bool,
+    artifacts: Vec<task::TaskArtifact>,
+    log: Option<String>,
 ) -> Result<()> {
     let status = if ok { "done" } else { "rejected" };
     let result_body = task::TaskResult {
@@ -763,6 +860,8 @@ fn record_task_outcome(
         error: error.clone(),
         exit_code,
         output_truncated: truncated,
+        artifacts,
+        log,
     }
     .to_body_string()?;
     send_message(

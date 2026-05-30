@@ -468,7 +468,10 @@ the trusted root, runs registered tools with JSON arguments on stdin, and return
 the result as a reply before writing a terminal `done` or `rejected` receipt.
 The built-in sandbox uses a scrubbed environment, a per-task scratch directory,
 a wall-clock timeout, and an output cap; it is not yet an OS-enforced container
-or microVM boundary.
+or microVM boundary. Captured stdout/stderr are also persisted as
+content-addressed artifacts under `artifacts/sha256-...`, and the executor writes
+a task log under `conversations/<id>/streams/<task-id>.log`. `task status --json`
+includes both the artifact metadata and the log path in the result body.
 
 ## Design Goals
 

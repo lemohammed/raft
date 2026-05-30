@@ -64,6 +64,19 @@ pub(crate) struct TaskResult {
     pub(crate) exit_code: Option<i32>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) output_truncated: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) artifacts: Vec<TaskArtifact>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) log: Option<String>,
+}
+
+/// A content-addressed task output produced by the executor.
+#[derive(Serialize, Deserialize, Clone)]
+pub(crate) struct TaskArtifact {
+    pub(crate) name: String,
+    pub(crate) hash: String,
+    pub(crate) path: String,
+    pub(crate) bytes: u64,
 }
 
 impl TaskBody {

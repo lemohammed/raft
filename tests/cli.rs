@@ -6408,6 +6408,126 @@ fn task_dispatch_run_and_result_close_the_obligation() {
 }
 
 #[test]
+fn executor_persists_artifacts_and_task_log() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(&bus, &["claim", "alice", "--workspace", "."]);
+    run(&bus, &["claim", "worker", "--workspace", "."]);
+    run(&bus, &["id", "new", "alice", "--json"]);
+    run(&bus, &["id", "new", "worker", "--json"]);
+    run(
+        &bus,
+        &[
+            "conversation",
+            "create",
+            "c",
+            "--participants",
+            "alice,worker",
+            "--starter",
+            "alice",
+        ],
+    );
+
+    let cap = bus.join("cap.json");
+    run(
+        &bus,
+        &[
+            "grant",
+            "new",
+            "--issuer",
+            "alice",
+            "--to",
+            "worker",
+            "--action",
+            "tool.run",
+            "--tool",
+            "echo",
+            "--ttl",
+            "1h",
+            "--out",
+            cap.to_str().unwrap(),
+            "--json",
+        ],
+    );
+    let dispatch = run(
+        &bus,
+        &[
+            "task",
+            "dispatch",
+            "--from",
+            "alice",
+            "--to",
+            "worker",
+            "--conversation",
+            "c",
+            "--tool",
+            "echo",
+            "--args",
+            r#"{"artifact":"hello"}"#,
+            "--cap",
+            cap.to_str().unwrap(),
+            "--json",
+        ],
+    );
+    let task_id = serde_json::from_slice::<serde_json::Value>(&dispatch.stdout).unwrap()["task_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    run(
+        &bus,
+        &[
+            "run",
+            "worker",
+            "--once",
+            "--tool",
+            "echo=/bin/cat",
+            "--trust",
+            "alice",
+            "--json",
+        ],
+    );
+
+    let status = run(&bus, &["task", "status", &task_id, "--json"]);
+    let status_json: serde_json::Value = serde_json::from_slice(&status.stdout).unwrap();
+    let result = &status_json["result"];
+    assert_eq!(result["ok"], true);
+    assert!(
+        result["log"]
+            .as_str()
+            .unwrap()
+            .ends_with(&format!("streams/{task_id}.log"))
+    );
+    let artifacts = result["artifacts"].as_array().unwrap();
+    assert!(
+        artifacts
+            .iter()
+            .any(|artifact| artifact["name"] == "stdout")
+    );
+
+    let stdout_artifact = artifacts
+        .iter()
+        .find(|artifact| artifact["name"] == "stdout")
+        .unwrap();
+    assert!(
+        stdout_artifact["hash"]
+            .as_str()
+            .unwrap()
+            .starts_with("sha256:")
+    );
+    let artifact_path = bus.join(stdout_artifact["path"].as_str().unwrap());
+    assert_eq!(
+        fs::read_to_string(&artifact_path).unwrap(),
+        r#"{"artifact":"hello"}"#
+    );
+
+    let log_path = bus.join(result["log"].as_str().unwrap());
+    let log = fs::read_to_string(log_path).unwrap();
+    assert!(log.contains(r#"[stdout] {"artifact":"hello"}"#));
+    assert!(log.contains("[exit] 0"));
+}
+
+#[test]
 fn executor_rejects_a_task_outside_the_capability() {
     let bus = temp_bus();
     run(&bus, &["init"]);

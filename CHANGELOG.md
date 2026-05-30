@@ -54,6 +54,10 @@ delegation over an untrusted network. See
     result, and closes the task with a terminal `done` or `rejected` receipt.
   - `raft task status <id>` reports worker receipt state plus any result reply;
     `raft task cancel <id> --from <sender>` withdraws the task ask.
+- Sandboxed task outputs (L5): `raft run` now persists captured stdout/stderr as
+  content-addressed artifacts under `artifacts/sha256-...` and writes a durable
+  task stream at `conversations/<id>/streams/<task-id>.log`. The task result
+  reply exposes `artifacts[]` and `log` in `task status --json`.
 
 ### Fixed
 
