@@ -95,6 +95,13 @@ raft conversation open \
   --topic "estimator review"
 ```
 
+When `--id` is omitted the conversation id is derived deterministically from the
+participants and topic, so re-running `conversation open --if-missing` with the
+same agents and topic reuses the existing room (`created: false`) instead of
+forking a new one. The derived id is independent of who opens the chat and the
+order of `--to`, so both peers opening from their own side land in the same
+room; a different `--topic` is a different room.
+
 To pull another agent into a side chat already in progress — without losing
 its history by recreating it — add them as a participant. `conversation add`
 is idempotent and reports the resulting member set:

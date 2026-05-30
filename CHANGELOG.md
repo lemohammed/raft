@@ -11,6 +11,15 @@ shell out to `raft` can branch on results reliably.
 
 ### Fixed
 
+- `conversation open --if-missing` (with a derived id) is now idempotent. The
+  derived id appended a random token, so every call minted a fresh id, the
+  already-exists check never matched, and each "ensure the room exists" call
+  silently forked a new private room — replies landed in one room while the peer
+  watched another, so messages appeared lost. The derived id is now a
+  deterministic function of the canonical (sorted, deduplicated) participants and
+  topic, so repeated opens resolve to the same room (`created: false`),
+  independent of who opens it or the order of `--to`. This also aligns the CLI
+  with the UI's private-chat deduplication.
 - `wait --resolved <id>` on an *already fully-resolved* multi-recipient ask now
   applies the same rejection-priority aggregation as the live blocking loop.
   When every recipient was already terminal at call time, the already-closed

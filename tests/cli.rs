@@ -1811,6 +1811,60 @@ fn group_conversation_and_private_side_chat_work() {
 }
 
 #[test]
+fn conversation_open_if_missing_is_idempotent_for_a_derived_id() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(&bus, &["claim", "alice", "--workspace", "."]);
+    run(&bus, &["claim", "bob", "--workspace", "."]);
+
+    let open = |from: &str, to: &str| -> serde_json::Value {
+        serde_json::from_slice(
+            &run(
+                &bus,
+                &[
+                    "conversation", "open", "--from", from, "--to", to,
+                    "--topic", "deploy", "--if-missing", "--json",
+                ],
+            )
+            .stdout,
+        )
+        .unwrap()
+    };
+
+    // First open derives an id and creates the room.
+    let first = open("alice", "bob");
+    assert_eq!(first["created"], true);
+    let id = first["conversation_id"].as_str().unwrap().to_string();
+
+    // Re-opening the same membership+topic must reuse that room, not fork a new
+    // one — the whole point of --if-missing. The derived id is deterministic.
+    let second = open("alice", "bob");
+    assert_eq!(second["conversation_id"].as_str().unwrap(), id);
+    assert_eq!(second["created"], false);
+
+    // The derived id is independent of who opens it and the order of --to, so a
+    // peer opening from the other side lands in the same room.
+    let reverse = open("bob", "alice");
+    assert_eq!(reverse["conversation_id"].as_str().unwrap(), id);
+    assert_eq!(reverse["created"], false);
+
+    // A different topic is a different room.
+    let other_topic: serde_json::Value = serde_json::from_slice(
+        &run(
+            &bus,
+            &[
+                "conversation", "open", "--from", "alice", "--to", "bob",
+                "--topic", "incident", "--if-missing", "--json",
+            ],
+        )
+        .stdout,
+    )
+    .unwrap();
+    assert_ne!(other_topic["conversation_id"].as_str().unwrap(), id);
+    assert_eq!(other_topic["created"], true);
+}
+
+#[test]
 fn event_kind_cannot_open_an_ask() {
     let bus = temp_bus();
     run(&bus, &["init"]);

@@ -172,8 +172,12 @@ subscription mechanism.
 
 Private chats use the same storage model with `private: true`. They can be 1:1
 or private groups. `raft conversation open --from A --to B,C` is the
-convenience path for opening a private side chat. `raft conversation create`
-remains the lower-level compatibility path.
+convenience path for opening a private side chat. When `--id` is omitted the id
+is derived deterministically from the canonical (sorted, deduplicated)
+participant set plus the topic, so `conversation open --if-missing` is
+idempotent — repeated calls with the same membership and topic resolve to the
+same room regardless of who opens it or the order of `--to`. `raft conversation
+create` remains the lower-level compatibility path.
 
 There is no turn lock. Any participant may append a `kind: "message"` at any
 time, subject only to the rate limit and message-size cap. This is a

@@ -167,10 +167,18 @@ pub(crate) fn extract_mentions(value: &str) -> Vec<String> {
 
 pub(crate) fn generated_private_conversation_id(participants: &[String], topic: &str) -> String {
     let topic_slug = slugify_id_segment(topic);
-    let participant_slug = participants
+    // Canonicalize the membership (sorted + deduped) so the derived id is a pure
+    // function of *who* and *what topic* — independent of who opened the chat or
+    // the order of `--to`. This is what makes `conversation open --if-missing`
+    // idempotent: a random suffix made every call mint a fresh id, so the
+    // already-exists check never matched and each call forked a new private room.
+    let mut canonical: Vec<&str> = participants.iter().map(String::as_str).collect();
+    canonical.sort_unstable();
+    canonical.dedup();
+    let participant_slug = canonical
         .iter()
         .take(3)
-        .map(String::as_str)
+        .copied()
         .collect::<Vec<_>>()
         .join("-");
     let base = if topic_slug.is_empty() {
@@ -178,7 +186,11 @@ pub(crate) fn generated_private_conversation_id(participants: &[String], topic: 
     } else {
         format!("p-{topic_slug}-{participant_slug}")
     };
-    let suffix = unique_token_short();
+    // Deterministic digest of the full canonical membership + topic, so groups
+    // that share a truncated 3-name slug still get distinct ids while identical
+    // inputs intentionally collide onto the same room. DefaultHasher uses fixed
+    // keys, so this is stable across runs on the same build.
+    let suffix = stable_membership_digest(&canonical, &topic_slug);
     let max_base_len = 79usize.saturating_sub(suffix.len());
     let mut trimmed = base.chars().take(max_base_len).collect::<String>();
     while trimmed.ends_with('-') || trimmed.ends_with('.') || trimmed.ends_with('_') {
@@ -188,6 +200,19 @@ pub(crate) fn generated_private_conversation_id(participants: &[String], topic: 
         trimmed.push('p');
     }
     format!("{trimmed}-{suffix}")
+}
+
+/// Stable 8-hex-char digest of a canonical participant list + topic. Each field
+/// is length-delimited so `["ab","c"]` and `["a","bc"]` cannot collide.
+fn stable_membership_digest(participants: &[&str], topic: &str) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for participant in participants {
+        participant.hash(&mut hasher);
+        0u8.hash(&mut hasher);
+    }
+    topic.hash(&mut hasher);
+    format!("{:08x}", hasher.finish() & 0xffff_ffff)
 }
 
 pub(crate) fn slugify_id_segment(value: &str) -> String {
