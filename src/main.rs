@@ -458,6 +458,15 @@ fn cmd_task_dispatch(root: &Path, args: TaskDispatchArgs) -> Result<()> {
         args.max_runtime_s,
         args.max_output_bytes,
     )?;
+    if let Some(token) = &body.capability {
+        let worker_pubkey = resolve_pubkey(root, &worker)?;
+        if token.blocks.last().map(|block| block.holder.as_str()) != Some(worker_pubkey.as_str()) {
+            bail_code!(
+                "auth_failed",
+                "capability holder does not match selected worker"
+            );
+        }
+    }
     let message = send_task_message(
         root,
         conversation_id,
