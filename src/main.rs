@@ -3172,11 +3172,20 @@ fn cmd_swarm_assign(root: &Path, args: SwarmAssignArgs) -> Result<()> {
         Some(&participants),
         args.count,
     )?;
-    if candidates.is_empty() {
-        bail_code!(
+    if candidates.len() < args.count {
+        return Err(RaftError::coded(
             "not_found",
-            "no live channel members matched the requested swarm capabilities"
-        );
+            format!(
+                "requested {} swarm assignee(s), but only {} live channel member(s) matched",
+                args.count,
+                candidates.len()
+            ),
+        )
+        .with_details(serde_json::json!({
+            "requested": args.count,
+            "available": candidates.len(),
+            "required_capabilities": required.clone(),
+        })));
     }
     let selected_agents: Vec<String> = candidates
         .iter()

@@ -3424,6 +3424,71 @@ fn swarm_assign_requires_at_least_one_capability() {
 }
 
 #[test]
+fn swarm_assign_rejects_when_requested_count_cannot_be_met() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(
+        &bus,
+        &[
+            "claim",
+            "coord",
+            "--workspace",
+            ".",
+            "--capabilities",
+            "coordination",
+        ],
+    );
+    run(
+        &bus,
+        &[
+            "claim",
+            "worker",
+            "--workspace",
+            ".",
+            "--capabilities",
+            "review",
+        ],
+    );
+    run(
+        &bus,
+        &[
+            "channel",
+            "create",
+            "squad",
+            "--creator",
+            "coord",
+            "--members",
+            "worker",
+        ],
+    );
+
+    let denied = run_fail(
+        &bus,
+        &[
+            "swarm",
+            "assign",
+            "--from",
+            "coord",
+            "--channel",
+            "squad",
+            "--capability",
+            "review",
+            "--count",
+            "2",
+            "--subject",
+            "Need two reviewers",
+            "--body",
+            "This requires two reviewers.",
+            "--json",
+        ],
+    );
+    let err: serde_json::Value = serde_json::from_slice(&denied.stderr).unwrap();
+    assert_eq!(err["error"]["code"], "not_found");
+    assert_eq!(err["error"]["requested"], 2);
+    assert_eq!(err["error"]["available"], 1);
+}
+
+#[test]
 fn swarm_dispatch_requires_at_least_one_capability() {
     let bus = temp_bus();
     run(&bus, &["init"]);
