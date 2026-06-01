@@ -353,6 +353,8 @@ It scans the existing bus and reports:
 - malformed message routing fields: invalid sender, conversation, recipient,
   mention, awaited-agent, `after`, or `subject_id` values, plus duplicate
   recipients, mentions, or awaited agents;
+- malformed receipt routing fields: invalid receipt message ids, conversation
+  ids, agent ids, or ack status values;
 - impossible asks: non-obligation message kinds carrying ack/reply obligations,
   duplicate or out-of-room awaited agents, and task messages missing one
   explicit worker recipient;
