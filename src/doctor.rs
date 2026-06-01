@@ -614,7 +614,16 @@ fn doctor_check_message(
             );
         }
     }
+    let mut awaited_seen = BTreeSet::new();
     for awaited in &message.needs_response_from {
+        if !awaited_seen.insert(awaited) {
+            report.error(
+                root,
+                path,
+                "duplicate_awaited_agent",
+                format!("awaited agent @{awaited} is listed more than once"),
+            );
+        }
         if !meta.participants.iter().any(|item| item == awaited) {
             report.error(
                 root,
