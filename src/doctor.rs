@@ -599,7 +599,16 @@ fn doctor_check_message(
             ),
         );
     }
+    let mut recipient_seen = BTreeSet::new();
     for recipient in &message.to {
+        if !recipient_seen.insert(recipient) {
+            report.error(
+                root,
+                path,
+                "duplicate_recipient",
+                format!("recipient @{recipient} is listed more than once"),
+            );
+        }
         if recipient != "*"
             && let Err(err) = validate_id(recipient, "recipient")
         {

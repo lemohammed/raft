@@ -3647,6 +3647,56 @@ fn doctor_flags_invalid_message_recipients() {
 }
 
 #[test]
+fn doctor_flags_duplicate_message_recipients() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    claim_agents(&bus, &["alice", "bob"]);
+    run(
+        &bus,
+        &[
+            "conversation",
+            "create",
+            "c",
+            "--participants",
+            "alice,bob",
+            "--starter",
+            "alice",
+        ],
+    );
+    let sent = run(
+        &bus,
+        &[
+            "send",
+            "--conversation",
+            "c",
+            "--from",
+            "alice",
+            "--to",
+            "bob",
+            "--body",
+            "hello",
+            "--json",
+        ],
+    );
+    let sent_json: serde_json::Value = serde_json::from_slice(&sent.stdout).unwrap();
+    let message_id = sent_json["message_id"].as_str().unwrap();
+    let path = bus.join(format!("conversations/c/messages/{message_id}.json"));
+    let mut message: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    message["to"] = serde_json::json!(["bob", "bob"]);
+    fs::write(&path, serde_json::to_vec_pretty(&message).unwrap()).unwrap();
+
+    let doctor = run_fail(&bus, &["doctor", "--json"]);
+    let report: serde_json::Value = serde_json::from_slice(&doctor.stdout).unwrap();
+    assert!(
+        report["issues"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|issue| issue["code"] == "duplicate_recipient")
+    );
+}
+
+#[test]
 fn doctor_flags_invalid_message_mentions() {
     let bus = temp_bus();
     run(&bus, &["init"]);
