@@ -997,6 +997,14 @@ fn doctor_check_receipt(
     if let Some(read_at) = receipt.read_at.as_deref() {
         doctor_check_time(root, path, report, "read_at", read_at);
     }
+    if receipt.history.is_empty() {
+        report.error(
+            root,
+            path,
+            "empty_receipt_history",
+            "receipt history is empty",
+        );
+    }
     for event in &receipt.history {
         if let Err(err) = validate_ack_status(&event.status) {
             report.error(
