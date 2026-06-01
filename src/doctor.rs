@@ -4,7 +4,9 @@ use crate::error::Result;
 use crate::receipt_recipients;
 use crate::storage::{collect_orphan_temp_files, is_agent_record_file};
 use crate::types::{Agent, HeartbeatState, LockOwner, Message, Meta, Receipt, WatchState};
-use crate::util::{parse_time, process_is_alive, validate_agent_state, validate_id};
+use crate::util::{
+    parse_time, process_is_alive, validate_agent_state, validate_id, validate_subject_id,
+};
 use crate::{MAX_SUMMARY_BYTES, SCHEMA_VERSION};
 use chrono::Utc;
 use serde::Serialize;
@@ -632,6 +634,16 @@ fn doctor_check_message(
                 format!("awaited agent @{awaited} is not a participant"),
             );
         }
+    }
+    if let Some(subject_id) = message.subject_id.as_deref()
+        && let Err(err) = validate_subject_id(subject_id)
+    {
+        report.error(
+            root,
+            path,
+            "invalid_subject_id",
+            format!("message subject_id is invalid: {}", err.message),
+        );
     }
     doctor_check_time(root, path, report, "created_at", &message.created_at);
     if message.requires_ack && receipt_recipients(message, meta).is_empty() {
