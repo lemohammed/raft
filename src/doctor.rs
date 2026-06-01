@@ -561,7 +561,7 @@ fn doctor_check_message(
     }
     if !matches!(
         message.kind.as_str(),
-        "message" | "event" | "receipt" | "system"
+        "message" | "event" | "receipt" | "system" | "task" | "summary"
     ) {
         report.error(
             root,

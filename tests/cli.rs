@@ -2931,6 +2931,69 @@ fn doctor_reports_healthy_bus_as_ok() {
 }
 
 #[test]
+fn doctor_accepts_task_and_summary_message_kinds() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    claim_agents(&bus, &["alice", "worker"]);
+    run(
+        &bus,
+        &[
+            "conversation",
+            "create",
+            "c",
+            "--participants",
+            "alice,worker",
+            "--starter",
+            "alice",
+        ],
+    );
+    run(
+        &bus,
+        &[
+            "send",
+            "--conversation",
+            "c",
+            "--from",
+            "alice",
+            "--to",
+            "worker",
+            "--kind",
+            "summary",
+            "--body",
+            "Current plan: worker handles the task.",
+        ],
+    );
+    run(
+        &bus,
+        &[
+            "task",
+            "dispatch",
+            "--from",
+            "alice",
+            "--to",
+            "worker",
+            "--conversation",
+            "c",
+            "--tool",
+            "echo",
+            "--args",
+            "{}",
+            "--json",
+        ],
+    );
+
+    let doctor = run(&bus, &["doctor", "--json"]);
+    let report: serde_json::Value = serde_json::from_slice(&doctor.stdout).unwrap();
+    let codes: Vec<&str> = report["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|issue| issue["code"].as_str())
+        .collect();
+    assert!(!codes.contains(&"invalid_message_kind"));
+}
+
+#[test]
 fn doctor_reports_corrupt_json_without_mutating() {
     let bus = temp_bus();
     run(&bus, &["init"]);
