@@ -538,6 +538,11 @@ raft task status m-abc123
 raft task cancel m-abc123 --from alice --reason superseded
 ```
 
+When `--cap` is supplied, `task dispatch` fails before writing the task unless
+the token's current holder matches the selected worker's claimed public key.
+That keeps a coordinator from accidentally assigning a valid token to the wrong
+agent and leaving the executor to reject it later.
+
 `raft run` is the v1 executor loop. It verifies the embedded capability against
 the trusted root, runs registered tools with JSON arguments on stdin, and returns
 the result as a reply before writing a terminal `done` or `rejected` receipt.
