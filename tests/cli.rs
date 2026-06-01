@@ -7652,6 +7652,45 @@ fn task_dispatch_requires_json_object_arguments() {
 }
 
 #[test]
+fn task_dispatch_rejects_unclaimed_worker() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(&bus, &["claim", "coord", "--workspace", "."]);
+    run(
+        &bus,
+        &[
+            "channel",
+            "create",
+            "squad",
+            "--creator",
+            "coord",
+            "--members",
+            "ghost",
+        ],
+    );
+
+    let denied = run_fail(
+        &bus,
+        &[
+            "task",
+            "dispatch",
+            "--from",
+            "coord",
+            "--to",
+            "ghost",
+            "--channel",
+            "squad",
+            "--tool",
+            "echo",
+            "--json",
+        ],
+    );
+    let err: serde_json::Value = serde_json::from_slice(&denied.stderr).unwrap();
+    assert_eq!(err["error"]["code"], "not_claimed");
+    assert!(err["error"]["message"].as_str().unwrap().contains("@ghost"));
+}
+
+#[test]
 fn task_dispatch_run_and_result_close_the_obligation() {
     let bus = temp_bus();
     run(&bus, &["init"]);

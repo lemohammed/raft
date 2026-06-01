@@ -450,6 +450,8 @@ fn cmd_task_dispatch(root: &Path, args: TaskDispatchArgs) -> Result<()> {
     let worker = validate_id(&args.to, "agent id")?;
     let conversation_id = target_room(args.conversation.as_deref(), args.channel.as_deref())?;
     ensure_root(root)?;
+    let _worker_record: Agent =
+        read_json(&agent_path(root, &worker))?.ok_or_else(|| not_claimed(root, &worker))?;
     let body = build_task_body(
         &args.tool,
         &args.args,
