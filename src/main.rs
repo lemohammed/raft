@@ -1806,6 +1806,10 @@ fn cmd_conversation_create(root: &Path, args: ConversationCreateArgs) -> Result<
     }
 
     ensure_root(root)?;
+    for participant in &participants {
+        let _agent_record: Agent = read_json(&agent_path(root, participant))?
+            .ok_or_else(|| not_claimed(root, participant))?;
+    }
     let conv = conversation_path(root, &conversation_id)?;
     let _lock = DirLock::acquire(
         root,
