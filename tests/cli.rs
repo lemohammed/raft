@@ -3400,6 +3400,76 @@ fn swarm_assign_selects_best_candidate_and_opens_an_ask() {
 }
 
 #[test]
+fn swarm_assign_dry_run_does_not_open_an_ask() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(
+        &bus,
+        &[
+            "claim",
+            "coord",
+            "--workspace",
+            ".",
+            "--capabilities",
+            "coordination",
+        ],
+    );
+    run(
+        &bus,
+        &[
+            "claim",
+            "worker",
+            "--workspace",
+            ".",
+            "--capabilities",
+            "review",
+        ],
+    );
+    run(
+        &bus,
+        &[
+            "channel",
+            "create",
+            "squad",
+            "--creator",
+            "coord",
+            "--members",
+            "worker",
+        ],
+    );
+
+    let preview = run(
+        &bus,
+        &[
+            "swarm",
+            "assign",
+            "--from",
+            "coord",
+            "--channel",
+            "squad",
+            "--capability",
+            "review",
+            "--subject",
+            "Preview assignment",
+            "--body",
+            "This should not create work.",
+            "--dry-run",
+            "--json",
+        ],
+    );
+    let preview_json: serde_json::Value = serde_json::from_slice(&preview.stdout).unwrap();
+    assert_eq!(preview_json["dry_run"], true);
+    assert_eq!(
+        preview_json["selected_agents"],
+        serde_json::json!(["worker"])
+    );
+
+    let awaiting = run(&bus, &["awaiting", "worker", "--json"]);
+    let awaiting_json: serde_json::Value = serde_json::from_slice(&awaiting.stdout).unwrap();
+    assert!(awaiting_json["you_owe"].as_array().unwrap().is_empty());
+}
+
+#[test]
 fn swarm_assign_requires_at_least_one_capability() {
     let bus = temp_bus();
     run(&bus, &["init"]);
