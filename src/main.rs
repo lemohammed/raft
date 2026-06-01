@@ -450,8 +450,7 @@ fn cmd_task_dispatch(root: &Path, args: TaskDispatchArgs) -> Result<()> {
     let worker = validate_id(&args.to, "agent id")?;
     let conversation_id = target_room(args.conversation.as_deref(), args.channel.as_deref())?;
     ensure_root(root)?;
-    let _worker_record: Agent =
-        read_json(&agent_path(root, &worker))?.ok_or_else(|| not_claimed(root, &worker))?;
+    load_claimed_agent(root, &worker)?;
     let body = build_task_body(
         &args.tool,
         &args.args,
@@ -580,8 +579,7 @@ fn find_task_result(root: &Path, task: &Message) -> Result<Option<task::TaskResu
 fn cmd_run(root: &Path, args: RunArgs) -> Result<()> {
     let worker = validate_id(&args.agent, "agent id")?;
     ensure_root(root)?;
-    let _worker_record: Agent =
-        read_json(&agent_path(root, &worker))?.ok_or_else(|| not_claimed(root, &worker))?;
+    load_claimed_agent(root, &worker)?;
     let mut tools: BTreeMap<String, PathBuf> = BTreeMap::new();
     for spec in &args.tool {
         let (name, path) = spec.split_once('=').ok_or_else(|| {
@@ -1569,10 +1567,7 @@ fn cmd_channel_create(root: &Path, args: ChannelCreateArgs) -> Result<()> {
     participants.extend(split_csv(&args.members)?);
     let participants = unique(participants);
     ensure_root(root)?;
-    for participant in &participants {
-        let _agent_record: Agent = read_json(&agent_path(root, participant))?
-            .ok_or_else(|| not_claimed(root, participant))?;
-    }
+    ensure_claimed_agents(root, &participants)?;
     let conv = conversation_path(root, &channel_id)?;
     let _lock = DirLock::acquire(
         root,
@@ -1661,8 +1656,7 @@ fn cmd_channel_join(root: &Path, args: ChannelJoinArgs) -> Result<()> {
     let channel_id = validate_id(&args.channel, "channel id")?;
     let agent_id = validate_id(&args.agent, "agent id")?;
     ensure_root(root)?;
-    let _agent_record: Agent =
-        read_json(&agent_path(root, &agent_id))?.ok_or_else(|| not_claimed(root, &agent_id))?;
+    load_claimed_agent(root, &agent_id)?;
     let _lock = DirLock::acquire(
         root,
         &format!("conversation-{channel_id}"),
@@ -1810,10 +1804,7 @@ fn cmd_conversation_create(root: &Path, args: ConversationCreateArgs) -> Result<
     }
 
     ensure_root(root)?;
-    for participant in &participants {
-        let _agent_record: Agent = read_json(&agent_path(root, participant))?
-            .ok_or_else(|| not_claimed(root, participant))?;
-    }
+    ensure_claimed_agents(root, &participants)?;
     let conv = conversation_path(root, &conversation_id)?;
     let _lock = DirLock::acquire(
         root,
@@ -1939,8 +1930,7 @@ fn cmd_conversation_add(root: &Path, args: ConversationAddArgs) -> Result<()> {
     let conversation_id = validate_id(&args.conversation, "conversation id")?;
     let agent_id = validate_id(&args.agent, "agent id")?;
     ensure_root(root)?;
-    let _agent_record: Agent =
-        read_json(&agent_path(root, &agent_id))?.ok_or_else(|| not_claimed(root, &agent_id))?;
+    load_claimed_agent(root, &agent_id)?;
     let _lock = DirLock::acquire(
         root,
         &format!("conversation-{conversation_id}"),
@@ -4542,6 +4532,17 @@ fn agent_ids(root: &Path) -> Vec<String> {
             }
         })
         .collect()
+}
+
+fn load_claimed_agent(root: &Path, agent_id: &str) -> Result<Agent> {
+    read_json(&agent_path(root, agent_id))?.ok_or_else(|| not_claimed(root, agent_id))
+}
+
+fn ensure_claimed_agents(root: &Path, agent_ids: &[String]) -> Result<()> {
+    for agent_id in agent_ids {
+        load_claimed_agent(root, agent_id)?;
+    }
+    Ok(())
 }
 
 /// A `not_claimed` error enriched with nearest-match agent-id `suggestions`, so
