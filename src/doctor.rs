@@ -623,6 +623,19 @@ fn doctor_check_message(
             "message requires ack but has no recipient other than sender",
         );
     }
+    if !matches!(message.kind.as_str(), "message" | "task")
+        && (message.requires_ack || !message.needs_response_from.is_empty())
+    {
+        report.error(
+            root,
+            path,
+            "non_obligation_kind_has_ask",
+            format!(
+                "kind {:?} must not carry requires_ack or needs_response_from",
+                message.kind
+            ),
+        );
+    }
     if message.kind != "system" {
         doctor_check_signed_record(
             root,
