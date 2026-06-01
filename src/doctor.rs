@@ -600,6 +600,11 @@ fn doctor_check_message(
         );
     }
     for recipient in &message.to {
+        if recipient != "*"
+            && let Err(err) = validate_id(recipient, "recipient")
+        {
+            report.error(root, path, "invalid_recipient_id", err.to_string());
+        }
         if recipient != "*" && !meta.participants.iter().any(|item| item == recipient) {
             report.error(
                 root,
