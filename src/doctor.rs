@@ -623,7 +623,16 @@ fn doctor_check_message(
             );
         }
     }
+    let mut mention_seen = BTreeSet::new();
     for mention in &message.mentions {
+        if !mention_seen.insert(mention) {
+            report.error(
+                root,
+                path,
+                "duplicate_mention",
+                format!("mention @{mention} is listed more than once"),
+            );
+        }
         if let Err(err) = validate_id(mention, "mention") {
             report.error(root, path, "invalid_mention_id", err.to_string());
         }
