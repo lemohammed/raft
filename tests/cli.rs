@@ -4679,6 +4679,45 @@ fn send_rejects_unclaimed_direct_recipient() {
 }
 
 #[test]
+fn send_rejects_wildcard_when_room_contains_unclaimed_participant() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    claim_agents(&bus, &["alice", "ghost"]);
+    run(
+        &bus,
+        &[
+            "channel",
+            "create",
+            "legacy",
+            "--creator",
+            "alice",
+            "--members",
+            "ghost",
+        ],
+    );
+    fs::remove_file(bus.join("agents/ghost.json")).unwrap();
+
+    let denied = run_fail(
+        &bus,
+        &[
+            "send",
+            "--channel",
+            "legacy",
+            "--from",
+            "alice",
+            "--to",
+            "*",
+            "--body",
+            "broadcast should not include ghost",
+            "--json",
+        ],
+    );
+    let err: serde_json::Value = serde_json::from_slice(&denied.stderr).unwrap();
+    assert_eq!(err["error"]["code"], "not_claimed");
+    assert!(err["error"]["message"].as_str().unwrap().contains("@ghost"));
+}
+
+#[test]
 fn conversation_remove_drops_a_participant_and_blocks_their_sends() {
     let bus = temp_bus();
     run(&bus, &["init"]);
