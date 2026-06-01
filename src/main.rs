@@ -2437,7 +2437,7 @@ pub(crate) fn send_message_locked(root: &Path, input: SendMessageInput) -> Resul
     let sender = validate_id(&input.sender, "sender")?;
     let mut recipients = unique(split_recipients(&input.to)?);
     if recipients.is_empty() {
-        bail!("--to needs at least one recipient");
+        bail_code!("parse", "--to needs at least one recipient");
     }
     for recipient in &recipients {
         if recipient != "*" {

@@ -4767,6 +4767,44 @@ fn send_rejects_unclaimed_direct_recipient() {
 }
 
 #[test]
+fn send_rejects_empty_recipients_with_parse_code() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    claim_agents(&bus, &["alice", "bob"]);
+    run(
+        &bus,
+        &[
+            "conversation",
+            "create",
+            "c",
+            "--participants",
+            "alice,bob",
+            "--starter",
+            "alice",
+        ],
+    );
+
+    let denied = run_fail(
+        &bus,
+        &[
+            "send",
+            "--conversation",
+            "c",
+            "--from",
+            "alice",
+            "--to",
+            "",
+            "--body",
+            "nobody",
+            "--json",
+        ],
+    );
+    let err: serde_json::Value = serde_json::from_slice(&denied.stderr).unwrap();
+    assert_eq!(err["error"]["code"], "parse");
+    assert!(err["error"]["message"].as_str().unwrap().contains("--to"));
+}
+
+#[test]
 fn send_rejects_wildcard_when_room_contains_unclaimed_participant() {
     let bus = temp_bus();
     run(&bus, &["init"]);
