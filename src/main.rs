@@ -3933,7 +3933,7 @@ fn cmd_show(root: &Path, args: ShowArgs) -> Result<()> {
 fn cmd_search(root: &Path, args: SearchArgs) -> Result<()> {
     let agent_id = validate_id(&args.agent, "agent id")?;
     let pattern = match args.pattern.as_deref().map(str::trim) {
-        Some("") => bail!("search pattern cannot be empty"),
+        Some("") => bail_code!("parse", "search pattern cannot be empty"),
         Some(pattern) => Some(pattern.to_lowercase()),
         None => None,
     };

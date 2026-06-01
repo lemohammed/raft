@@ -1798,6 +1798,23 @@ fn search_json_honors_since_and_limit() {
 }
 
 #[test]
+fn search_rejects_empty_pattern_with_parse_code() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(&bus, &["claim", "a", "--workspace", "."]);
+
+    let denied = run_fail(&bus, &["search", "   ", "--agent", "a", "--json"]);
+    let err: serde_json::Value = serde_json::from_slice(&denied.stderr).unwrap();
+    assert_eq!(err["error"]["code"], "parse");
+    assert!(
+        err["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("cannot be empty")
+    );
+}
+
+#[test]
 fn thread_renders_after_descendants_as_tree() {
     let bus = temp_bus();
     run(&bus, &["init"]);
