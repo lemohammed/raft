@@ -9370,6 +9370,72 @@ fn task_dispatch_rejects_runtime_beyond_capability() {
 }
 
 #[test]
+fn task_dispatch_rejects_output_beyond_capability() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    claim_agents(&bus, &["alice", "worker"]);
+    run(
+        &bus,
+        &[
+            "conversation",
+            "create",
+            "c",
+            "--participants",
+            "alice,worker",
+            "--starter",
+            "alice",
+        ],
+    );
+    let cap = bus.join("cap.json");
+    run(
+        &bus,
+        &[
+            "grant",
+            "new",
+            "--issuer",
+            "alice",
+            "--to",
+            "worker",
+            "--action",
+            "tool.run",
+            "--tool",
+            "echo",
+            "--max-output-bytes",
+            "10",
+            "--ttl",
+            "1h",
+            "--out",
+            cap.to_str().unwrap(),
+            "--json",
+        ],
+    );
+
+    let denied = run_fail(
+        &bus,
+        &[
+            "task",
+            "dispatch",
+            "--from",
+            "alice",
+            "--to",
+            "worker",
+            "--conversation",
+            "c",
+            "--tool",
+            "echo",
+            "--max-output-bytes",
+            "11",
+            "--cap",
+            cap.to_str().unwrap(),
+            "--json",
+        ],
+    );
+    let err: serde_json::Value = serde_json::from_slice(&denied.stderr).unwrap();
+    assert_eq!(err["error"]["code"], "not_authorized");
+    assert!(err["error"]["message"].as_str().unwrap().contains("output"));
+}
+
+#[test]
 fn task_dispatch_run_and_result_close_the_obligation() {
     let bus = temp_bus();
     run(&bus, &["init"]);
