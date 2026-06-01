@@ -629,6 +629,9 @@ fn doctor_check_message(
     }
     let mut awaited_seen = BTreeSet::new();
     for awaited in &message.needs_response_from {
+        if let Err(err) = validate_id(awaited, "awaited agent") {
+            report.error(root, path, "invalid_awaited_id", err.to_string());
+        }
         if !awaited_seen.insert(awaited) {
             report.error(
                 root,
