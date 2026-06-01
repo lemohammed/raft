@@ -542,6 +542,9 @@ When `--cap` is supplied, `task dispatch` fails before writing the task unless
 the token's current holder matches the selected worker's claimed public key.
 That keeps a coordinator from accidentally assigning a valid token to the wrong
 agent and leaving the executor to reject it later.
+The `task` message kind is reserved for this dispatch path; `send`, `reply`,
+and the UI endpoint reject manual `kind=task` writes so they cannot bypass the
+Hermes body and worker/capability checks.
 
 `raft run` is the v1 executor loop. It verifies the embedded capability against
 the trusted root, runs registered tools with JSON arguments on stdin, and returns
