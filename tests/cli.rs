@@ -3267,6 +3267,33 @@ fn swarm_candidates_rank_live_capable_low_load_agents() {
 }
 
 #[test]
+fn swarm_candidates_rejects_zero_limit() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+
+    let denied = run_fail(
+        &bus,
+        &[
+            "swarm",
+            "candidates",
+            "--capability",
+            "review",
+            "--limit",
+            "0",
+            "--json",
+        ],
+    );
+    let err: serde_json::Value = serde_json::from_slice(&denied.stderr).unwrap();
+    assert_eq!(err["error"]["code"], "parse");
+    assert!(
+        err["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("--limit")
+    );
+}
+
+#[test]
 fn swarm_assign_selects_best_candidate_and_opens_an_ask() {
     let bus = temp_bus();
     run(&bus, &["init"]);

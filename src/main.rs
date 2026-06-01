@@ -3094,6 +3094,9 @@ fn rank_swarm_candidates(
 
 fn cmd_swarm_candidates(root: &Path, args: SwarmCandidatesArgs) -> Result<()> {
     ensure_root(root)?;
+    if args.limit == 0 {
+        bail_code!("parse", "swarm candidates --limit must be at least 1");
+    }
     let required = parse_repeated_csv(&args.capabilities, "capability")?;
     let excluded: BTreeSet<String> = parse_repeated_csv(&args.exclude, "agent id")?
         .into_iter()
