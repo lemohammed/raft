@@ -188,6 +188,12 @@ Channels are shared group chats. `raft channel create` creates a channel and
 participants see channel messages in `inbox`/`wait`; joining is the notification
 subscription mechanism.
 
+Room membership is claim-bound. A client must not add a participant unless
+`agents/<id>.json` already exists for that local name. This applies to channel
+creation, channel joins, conversation creation, and conversation adds; it keeps
+placeholder names from accumulating history or obligations before an identity
+has claimed them.
+
 Private chats use the same storage model with `private: true`. They can be 1:1
 or private groups. `raft conversation open --from A --to B,C` is the
 convenience path for opening a private side chat. When `--id` is omitted the id
