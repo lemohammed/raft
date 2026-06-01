@@ -8949,6 +8949,29 @@ fn capability_only_the_holder_can_attenuate_via_cli() {
 }
 
 #[test]
+fn grant_rejects_bad_ttl_with_parse_code() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    claim_agents(&bus, &["alice", "worker"]);
+
+    let denied = run_fail(
+        &bus,
+        &[
+            "grant", "new", "--issuer", "alice", "--to", "worker", "--action", "tool.run", "--ttl",
+            "soon", "--json",
+        ],
+    );
+    let err: serde_json::Value = serde_json::from_slice(&denied.stderr).unwrap();
+    assert_eq!(err["error"]["code"], "parse");
+    assert!(
+        err["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("invalid duration")
+    );
+}
+
+#[test]
 fn task_dispatch_requires_json_object_arguments() {
     let bus = temp_bus();
     run(&bus, &["init"]);

@@ -272,15 +272,18 @@ fn parse_duration_seconds(value: &str) -> Result<u64> {
         Some((idx, last)) if last.is_ascii_alphabetic() => (&value[..idx], &value[idx..]),
         _ => (value, "s"),
     };
-    let amount: u64 = number
-        .parse()
-        .map_err(|_| RaftError::new(format!("invalid duration {value:?}; try 30m, 2h, 7d")))?;
+    let amount: u64 = number.parse().map_err(|_| {
+        RaftError::coded(
+            "parse",
+            format!("invalid duration {value:?}; try 30m, 2h, 7d"),
+        )
+    })?;
     let seconds = match unit {
         "s" => amount,
         "m" => amount * 60,
         "h" => amount * 3600,
         "d" => amount * 86_400,
-        _ => bail!("invalid duration {value:?}; use s, m, h, or d"),
+        _ => bail_code!("parse", "invalid duration {value:?}; use s, m, h, or d"),
     };
     Ok(seconds)
 }
