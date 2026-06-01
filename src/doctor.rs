@@ -948,6 +948,9 @@ fn doctor_check_receipt(
             ),
         );
     }
+    if let Err(err) = validate_id(&receipt.agent, "receipt agent") {
+        report.error(root, path, "invalid_receipt_agent_id", err.to_string());
+    }
     if !meta
         .participants
         .iter()
