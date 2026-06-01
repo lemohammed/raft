@@ -1,4 +1,3 @@
-use crate::SCHEMA_VERSION;
 use crate::cli::DoctorArgs;
 use crate::crypto;
 use crate::error::Result;
@@ -6,6 +5,7 @@ use crate::receipt_recipients;
 use crate::storage::{collect_orphan_temp_files, is_agent_record_file};
 use crate::types::{Agent, HeartbeatState, LockOwner, Message, Meta, Receipt, WatchState};
 use crate::util::{parse_time, process_is_alive, validate_agent_state, validate_id};
+use crate::{MAX_SUMMARY_BYTES, SCHEMA_VERSION};
 use chrono::Utc;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -633,6 +633,18 @@ fn doctor_check_message(
             format!(
                 "kind {:?} must not carry requires_ack or needs_response_from",
                 message.kind
+            ),
+        );
+    }
+    if message.kind == "summary" && message.body.len() > MAX_SUMMARY_BYTES {
+        report.error(
+            root,
+            path,
+            "summary_too_large",
+            format!(
+                "summary is {} bytes; limit is {}",
+                message.body.len(),
+                MAX_SUMMARY_BYTES
             ),
         );
     }
