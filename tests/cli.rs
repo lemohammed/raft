@@ -8004,6 +8004,103 @@ fn executor_rejects_a_task_outside_the_capability() {
 }
 
 #[test]
+fn executor_requires_local_passport_before_running_tasks() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(&bus, &["claim", "alice", "--workspace", "."]);
+    run(&bus, &["claim", "worker", "--workspace", "."]);
+    run(
+        &bus,
+        &[
+            "conversation",
+            "create",
+            "c",
+            "--participants",
+            "alice,worker",
+            "--starter",
+            "alice",
+        ],
+    );
+
+    // Alice issues a token to herself, then sends it on a task assigned to
+    // worker. If worker's local passport is missing, the executor must refuse
+    // to process anything as worker instead of running with a weakened identity.
+    let cap = bus.join("cap.json");
+    run(
+        &bus,
+        &[
+            "grant",
+            "new",
+            "--issuer",
+            "alice",
+            "--to",
+            "alice",
+            "--action",
+            "tool.run",
+            "--tool",
+            "echo",
+            "--ttl",
+            "1h",
+            "--out",
+            cap.to_str().unwrap(),
+            "--json",
+        ],
+    );
+    let dispatch = run(
+        &bus,
+        &[
+            "task",
+            "dispatch",
+            "--from",
+            "alice",
+            "--to",
+            "worker",
+            "--conversation",
+            "c",
+            "--tool",
+            "echo",
+            "--args",
+            r#"{"should":"not run"}"#,
+            "--cap",
+            cap.to_str().unwrap(),
+            "--json",
+        ],
+    );
+    let task_id = serde_json::from_slice::<serde_json::Value>(&dispatch.stdout).unwrap()["task_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    fs::remove_file(bus.join("agents/worker.passport.json")).unwrap();
+
+    let denied = run_fail(
+        &bus,
+        &[
+            "run",
+            "worker",
+            "--once",
+            "--tool",
+            "echo=/bin/cat",
+            "--trust",
+            "alice",
+            "--json",
+        ],
+    );
+    let err: serde_json::Value = serde_json::from_slice(&denied.stderr).unwrap();
+    assert_eq!(err["error"]["code"], "auth_failed");
+    assert!(
+        err["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("passport")
+    );
+
+    let status = run(&bus, &["task", "status", &task_id, "--json"]);
+    let status_json: serde_json::Value = serde_json::from_slice(&status.stdout).unwrap();
+    assert_eq!(status_json["workers"][0]["status"], "pending");
+    assert_eq!(status_json["result"], serde_json::Value::Null);
+}
+
+#[test]
 fn executor_rejects_unclaimed_worker() {
     let bus = temp_bus();
     run(&bus, &["init"]);
