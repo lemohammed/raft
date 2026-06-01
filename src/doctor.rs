@@ -998,6 +998,14 @@ fn doctor_check_receipt(
         doctor_check_time(root, path, report, "read_at", read_at);
     }
     for event in &receipt.history {
+        if let Err(err) = validate_ack_status(&event.status) {
+            report.error(
+                root,
+                path,
+                "invalid_receipt_history_status",
+                format!("receipt history status is invalid: {}", err.message),
+            );
+        }
         doctor_check_time(root, path, report, "history.at", &event.at);
     }
     doctor_check_signed_record(
