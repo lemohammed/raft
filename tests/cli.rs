@@ -3098,6 +3098,61 @@ fn doctor_flags_oversized_summary_messages() {
 }
 
 #[test]
+fn doctor_flags_invalid_task_bodies() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    claim_agents(&bus, &["alice", "worker"]);
+    run(
+        &bus,
+        &[
+            "conversation",
+            "create",
+            "c",
+            "--participants",
+            "alice,worker",
+            "--starter",
+            "alice",
+        ],
+    );
+    let dispatch = run(
+        &bus,
+        &[
+            "task",
+            "dispatch",
+            "--from",
+            "alice",
+            "--to",
+            "worker",
+            "--conversation",
+            "c",
+            "--tool",
+            "echo",
+            "--args",
+            "{}",
+            "--json",
+        ],
+    );
+    let task_id = serde_json::from_slice::<serde_json::Value>(&dispatch.stdout).unwrap()["task_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let path = bus.join(format!("conversations/c/messages/{task_id}.json"));
+    let mut message: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    message["body"] = serde_json::json!("not task json");
+    fs::write(&path, serde_json::to_vec_pretty(&message).unwrap()).unwrap();
+
+    let doctor = run_fail(&bus, &["doctor", "--json"]);
+    let report: serde_json::Value = serde_json::from_slice(&doctor.stdout).unwrap();
+    assert!(
+        report["issues"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|issue| issue["code"] == "invalid_task_body")
+    );
+}
+
+#[test]
 fn doctor_reports_corrupt_json_without_mutating() {
     let bus = temp_bus();
     run(&bus, &["init"]);

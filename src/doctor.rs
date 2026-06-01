@@ -648,6 +648,16 @@ fn doctor_check_message(
             ),
         );
     }
+    if message.kind == "task"
+        && let Err(err) = crate::task::TaskBody::parse(&message.body)
+    {
+        report.error(
+            root,
+            path,
+            "invalid_task_body",
+            format!("task body is not valid Hermes JSON: {}", err.message),
+        );
+    }
     if message.kind != "system" {
         doctor_check_signed_record(
             root,
