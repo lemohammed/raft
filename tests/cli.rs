@@ -7965,6 +7965,17 @@ fn executor_rejects_a_task_outside_the_capability() {
 }
 
 #[test]
+fn executor_rejects_unclaimed_worker() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+
+    let denied = run_fail(&bus, &["run", "ghost", "--once", "--json"]);
+    let err: serde_json::Value = serde_json::from_slice(&denied.stderr).unwrap();
+    assert_eq!(err["error"]["code"], "not_claimed");
+    assert!(err["error"]["message"].as_str().unwrap().contains("@ghost"));
+}
+
+#[test]
 fn executor_records_launch_failures_as_rejected_tasks() {
     let bus = temp_bus();
     run(&bus, &["init"]);

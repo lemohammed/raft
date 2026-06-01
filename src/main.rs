@@ -578,6 +578,8 @@ fn find_task_result(root: &Path, task: &Message) -> Result<Option<task::TaskResu
 fn cmd_run(root: &Path, args: RunArgs) -> Result<()> {
     let worker = validate_id(&args.agent, "agent id")?;
     ensure_root(root)?;
+    let _worker_record: Agent =
+        read_json(&agent_path(root, &worker))?.ok_or_else(|| not_claimed(root, &worker))?;
     let mut tools: BTreeMap<String, PathBuf> = BTreeMap::new();
     for spec in &args.tool {
         let (name, path) = spec.split_once('=').ok_or_else(|| {
