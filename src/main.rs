@@ -3270,12 +3270,17 @@ fn cmd_swarm_dispatch(root: &Path, args: SwarmDispatchArgs) -> Result<()> {
         Some(&participants),
         1,
     )?;
-    let candidate = candidates.pop().ok_or_else(|| {
-        RaftError::coded(
+    if candidates.is_empty() {
+        return Err(RaftError::coded(
             "not_found",
             "no live channel member matched the requested swarm capabilities",
         )
-    })?;
+        .with_details(serde_json::json!({
+            "available": candidates.len(),
+            "required_capabilities": required.clone(),
+        })));
+    }
+    let candidate = candidates.pop().expect("checked non-empty candidates");
     let worker = candidate.id.clone();
     let body = build_task_body(
         &args.tool,

@@ -3662,6 +3662,70 @@ fn swarm_dispatch_requires_at_least_one_capability() {
 }
 
 #[test]
+fn swarm_dispatch_reports_required_capabilities_when_no_worker_matches() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(
+        &bus,
+        &[
+            "claim",
+            "coord",
+            "--workspace",
+            ".",
+            "--capabilities",
+            "coordination",
+        ],
+    );
+    run(
+        &bus,
+        &[
+            "claim",
+            "worker",
+            "--workspace",
+            ".",
+            "--capabilities",
+            "docs",
+        ],
+    );
+    run(
+        &bus,
+        &[
+            "channel",
+            "create",
+            "squad",
+            "--creator",
+            "coord",
+            "--members",
+            "worker",
+        ],
+    );
+
+    let denied = run_fail(
+        &bus,
+        &[
+            "swarm",
+            "dispatch",
+            "--from",
+            "coord",
+            "--channel",
+            "squad",
+            "--capability",
+            "echo",
+            "--tool",
+            "echo",
+            "--json",
+        ],
+    );
+    let err: serde_json::Value = serde_json::from_slice(&denied.stderr).unwrap();
+    assert_eq!(err["error"]["code"], "not_found");
+    assert_eq!(
+        err["error"]["required_capabilities"],
+        serde_json::json!(["echo"])
+    );
+    assert_eq!(err["error"]["available"], 0);
+}
+
+#[test]
 fn swarm_dispatch_selects_best_candidate_and_runs_task() {
     let bus = temp_bus();
     run(&bus, &["init"]);
