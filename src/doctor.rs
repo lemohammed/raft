@@ -519,6 +519,11 @@ fn doctor_scan_messages(
         .filter(|(_, message)| message.kind == "task")
         .map(|(_, message)| message.id.clone())
         .collect();
+    let task_workers: std::collections::BTreeMap<String, Vec<String>> = messages
+        .iter()
+        .filter(|(_, message)| message.kind == "task")
+        .map(|(_, message)| (message.id.clone(), message.needs_response_from.clone()))
+        .collect();
     for (path, message) in messages {
         if let Some(after) = message.after.as_deref()
             && !message_ids.contains(after)
@@ -540,6 +545,21 @@ fn doctor_scan_messages(
                 &path,
                 "invalid_task_result",
                 format!("reply to task {after:?} is not a valid task result: {err}"),
+            );
+        }
+        if let Some(after) = message.after.as_deref()
+            && let Some(workers) = task_workers.get(after)
+            && message.kind == "message"
+            && !workers.iter().any(|worker| worker == &message.from)
+        {
+            report.error(
+                root,
+                &path,
+                "task_result_from_unawaited_agent",
+                format!(
+                    "reply to task {after:?} came from unawaited agent @{}",
+                    message.from
+                ),
             );
         }
     }

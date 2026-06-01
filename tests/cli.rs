@@ -4310,6 +4310,69 @@ fn doctor_flags_invalid_task_results() {
 }
 
 #[test]
+fn doctor_flags_task_results_from_unawaited_agents() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    claim_agents(&bus, &["alice", "worker"]);
+    run(
+        &bus,
+        &[
+            "conversation",
+            "create",
+            "c",
+            "--participants",
+            "alice,worker",
+            "--starter",
+            "alice",
+        ],
+    );
+    let dispatch = run(
+        &bus,
+        &[
+            "task",
+            "dispatch",
+            "--from",
+            "alice",
+            "--to",
+            "worker",
+            "--conversation",
+            "c",
+            "--tool",
+            "echo",
+            "--args",
+            "{}",
+            "--json",
+        ],
+    );
+    let task_id = serde_json::from_slice::<serde_json::Value>(&dispatch.stdout).unwrap()["task_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    run(
+        &bus,
+        &[
+            "reply",
+            &task_id,
+            "--from",
+            "alice",
+            "--body",
+            r#"{"ok":true}"#,
+            "--json",
+        ],
+    );
+
+    let doctor = run_fail(&bus, &["doctor", "--json"]);
+    let report: serde_json::Value = serde_json::from_slice(&doctor.stdout).unwrap();
+    assert!(
+        report["issues"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|issue| issue["code"] == "task_result_from_unawaited_agent")
+    );
+}
+
+#[test]
 fn doctor_flags_task_worker_not_addressed() {
     let bus = temp_bus();
     run(&bus, &["init"]);
