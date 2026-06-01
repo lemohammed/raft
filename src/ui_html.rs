@@ -601,11 +601,14 @@ pub(crate) const UI_HTML: &str = r##"<!doctype html>
       agent: new URLSearchParams(location.search).get("agent") || "codex",
       selected: null,
       snapshot: null,
+      snapshotEtag: null,
       unreadOnly: false,
       query: "",
       detailsOpen: false,
       renderedRoom: null,
-      forceScrollBottom: false
+      forceScrollBottom: false,
+      pollDelayMs: 5000,
+      pollTimer: null
     };
 
     const $ = (id) => document.getElementById(id);
@@ -636,20 +639,33 @@ pub(crate) const UI_HTML: &str = r##"<!doctype html>
 
     async function loadSnapshot({ quiet = false } = {}) {
       if (!quiet) setStatus("loading");
+      const previousAgent = state.agent;
       const agent = $("agent-input").value.trim() || "codex";
+      const headers = {};
+      if (quiet && state.snapshotEtag && agent === previousAgent) {
+        headers["If-None-Match"] = state.snapshotEtag;
+      }
       state.agent = agent;
-      const response = await fetch(`/api/snapshot?agent=${encodeURIComponent(agent)}&limit=160`, { cache: "no-store" });
+      const response = await fetch(`/api/snapshot?agent=${encodeURIComponent(agent)}&limit=160`, { cache: "no-store", headers });
+      if (response.status === 304) {
+        state.pollDelayMs = 5000;
+        setStatus("live");
+        return false;
+      }
       if (!response.ok) {
         setStatus("error", "error");
         throw new Error(await response.text());
       }
+      state.snapshotEtag = response.headers.get("ETag") || null;
       state.snapshot = await response.json();
       if (!state.selected || !state.snapshot.conversations.some((item) => item.id === state.selected)) {
         state.selected = state.snapshot.conversations[0]?.id || null;
       }
       history.replaceState(null, "", `?agent=${encodeURIComponent(agent)}`);
       render();
+      state.pollDelayMs = 5000;
       setStatus("live");
+      return true;
     }
 
     function filteredConversations() {
@@ -1119,6 +1135,22 @@ pub(crate) const UI_HTML: &str = r##"<!doctype html>
       }
     }
 
+    function schedulePoll() {
+      clearTimeout(state.pollTimer);
+      state.pollTimer = setTimeout(pollSnapshot, state.pollDelayMs);
+    }
+
+    async function pollSnapshot() {
+      try {
+        await loadSnapshot({ quiet: true });
+      } catch {
+        state.pollDelayMs = Math.min(30000, Math.max(5000, state.pollDelayMs * 2));
+        setStatus(`offline ${Math.round(state.pollDelayMs / 1000)}s`, "error");
+      } finally {
+        schedulePoll();
+      }
+    }
+
     $("refresh-button").addEventListener("click", () => loadSnapshot().catch((error) => toast(error.message)));
     $("open-private-button").addEventListener("click", () => openPrivateChat($("private-to-input").value, $("private-topic-input").value));
     $("create-channel-button").addEventListener("click", () => createChannel());
@@ -1152,8 +1184,7 @@ pub(crate) const UI_HTML: &str = r##"<!doctype html>
       empty.className = "empty";
       empty.textContent = error.message;
       list.append(empty);
-    });
-    setInterval(() => loadSnapshot({ quiet: true }).catch(() => setStatus("offline", "error")), 5000);
+    }).finally(() => schedulePoll());
   </script>
 </body>
 </html>

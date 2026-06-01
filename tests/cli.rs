@@ -1,7 +1,7 @@
 use std::fs;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
@@ -1159,6 +1159,132 @@ fn ui_snapshot_endpoint_serves_bus_state() {
     assert!(send_response.contains("\"message_id\""));
     let inbox = run(&bus, &["inbox", "beta-agent", "--unread", "--width", "200"]);
     assert!(String::from_utf8_lossy(&inbox.stdout).contains("sent from ui endpoint"));
+}
+
+#[test]
+fn ui_snapshot_supports_etag_revalidation() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(&bus, &["claim", "alpha-agent", "--workspace", "."]);
+    run(&bus, &["claim", "beta-agent", "--workspace", "."]);
+    run(
+        &bus,
+        &[
+            "conversation",
+            "create",
+            "c",
+            "--participants",
+            "alpha-agent,beta-agent",
+            "--starter",
+            "alpha-agent",
+        ],
+    );
+    run(
+        &bus,
+        &[
+            "send",
+            "--conversation",
+            "c",
+            "--from",
+            "alpha-agent",
+            "--to",
+            "beta-agent",
+            "--body",
+            "initial ui payload",
+        ],
+    );
+
+    let probe = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = probe.local_addr().unwrap().port();
+    drop(probe);
+    let port_string = port.to_string();
+    let mut child = Command::new(bin())
+        .arg("--root")
+        .arg(&bus)
+        .args([
+            "ui",
+            "--agent",
+            "beta-agent",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            &port_string,
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+
+    let request_snapshot = |extra_headers: &str| -> String {
+        let request = format!(
+            "GET /api/snapshot?agent=beta-agent HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n{extra_headers}\r\n"
+        );
+        let mut last_error = None;
+        for _ in 0..40 {
+            match TcpStream::connect(("127.0.0.1", port)) {
+                Ok(mut stream) => {
+                    stream.write_all(request.as_bytes()).unwrap();
+                    let mut response = String::new();
+                    stream.read_to_string(&mut response).unwrap();
+                    return response;
+                }
+                Err(error) => {
+                    last_error = Some(error);
+                    thread::sleep(Duration::from_millis(50));
+                }
+            }
+        }
+        panic!("ui server did not accept connections: {last_error:?}");
+    };
+
+    let first = request_snapshot("");
+    let etag = first.lines().find_map(|line| {
+        let (key, value) = line.split_once(':')?;
+        key.eq_ignore_ascii_case("etag")
+            .then(|| value.trim().to_string())
+    });
+
+    let (unchanged, changed) = if let Some(etag) = etag.as_deref() {
+        let unchanged = request_snapshot(&format!("If-None-Match: {etag}\r\n"));
+        run(
+            &bus,
+            &[
+                "send",
+                "--conversation",
+                "c",
+                "--from",
+                "alpha-agent",
+                "--to",
+                "beta-agent",
+                "--body",
+                "changed ui payload",
+            ],
+        );
+        let changed = request_snapshot(&format!("If-None-Match: {etag}\r\n"));
+        (unchanged, changed)
+    } else {
+        (String::new(), String::new())
+    };
+    let mut index_response = String::new();
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    stream
+        .write_all(format!("GET / HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n").as_bytes())
+        .unwrap();
+    stream.read_to_string(&mut index_response).unwrap();
+    child.kill().unwrap();
+    let _ = child.wait();
+    let etag = etag.expect("snapshot response should include an ETag");
+
+    assert!(first.starts_with("HTTP/1.1 200 OK"));
+    assert!(first.contains("initial ui payload"));
+    assert!(etag.starts_with("W/\"ui-"));
+    assert!(unchanged.starts_with("HTTP/1.1 304 Not Modified"));
+    assert!(unchanged.contains("Content-Length: 0"));
+    assert!(!unchanged.contains("initial ui payload"));
+    assert!(changed.starts_with("HTTP/1.1 200 OK"));
+    assert!(changed.contains("changed ui payload"));
+    assert!(index_response.contains("If-None-Match"));
+    assert!(index_response.contains("pollDelayMs"));
 }
 
 #[test]
@@ -2858,7 +2984,7 @@ fn gc_reaps_stale_orphan_temp_files_but_keeps_fresh_ones() {
     );
 }
 
-fn write_lock(bus: &PathBuf, name: &str, token: &str, expires_at: &str) -> PathBuf {
+fn write_lock(bus: &Path, name: &str, token: &str, expires_at: &str) -> PathBuf {
     let dir = bus.join("locks").join(format!("{name}.lock"));
     fs::create_dir_all(&dir).unwrap();
     let owner = format!(
@@ -3013,6 +3139,438 @@ fn roster_exposes_capabilities_and_filters_by_them() {
     let filtered_agents = filtered_json["agents"].as_array().unwrap();
     assert_eq!(filtered_agents.len(), 1);
     assert_eq!(filtered_agents[0]["id"], "bob");
+}
+
+#[test]
+fn swarm_candidates_rank_live_capable_low_load_agents() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(
+        &bus,
+        &[
+            "claim",
+            "coord",
+            "--workspace",
+            ".",
+            "--capabilities",
+            "coordination",
+        ],
+    );
+    run(
+        &bus,
+        &[
+            "claim",
+            "alice",
+            "--workspace",
+            ".",
+            "--capabilities",
+            "review,docs",
+        ],
+    );
+    run(
+        &bus,
+        &[
+            "claim",
+            "bob",
+            "--workspace",
+            ".",
+            "--capabilities",
+            "review,tests",
+        ],
+    );
+    run(
+        &bus,
+        &[
+            "claim",
+            "carol",
+            "--workspace",
+            ".",
+            "--capabilities",
+            "implementation",
+        ],
+    );
+    run(&bus, &["state", "set", "bob", "working", "--note", "busy"]);
+    run(
+        &bus,
+        &[
+            "conversation",
+            "create",
+            "squad",
+            "--participants",
+            "coord,alice,bob,carol",
+            "--starter",
+            "coord",
+        ],
+    );
+    run(
+        &bus,
+        &[
+            "send",
+            "--conversation",
+            "squad",
+            "--from",
+            "coord",
+            "--to",
+            "bob",
+            "--subject",
+            "existing ask",
+            "--body",
+            "please finish this first",
+            "--needs-response-from",
+            "bob",
+        ],
+    );
+
+    let ranked = run(
+        &bus,
+        &[
+            "swarm",
+            "candidates",
+            "--capability",
+            "review",
+            "--exclude",
+            "coord",
+            "--json",
+        ],
+    );
+    let ranked_json: serde_json::Value = serde_json::from_slice(&ranked.stdout).unwrap();
+    assert_eq!(
+        ranked_json["required_capabilities"],
+        serde_json::json!(["review"])
+    );
+    let candidates = ranked_json["candidates"].as_array().unwrap();
+    assert_eq!(candidates.len(), 2);
+    assert_eq!(candidates[0]["id"], "alice");
+    assert_eq!(
+        candidates[0]["matching_capabilities"],
+        serde_json::json!(["review"])
+    );
+    assert_eq!(candidates[0]["missing_capabilities"], serde_json::json!([]));
+    assert_eq!(candidates[0]["owes"], 0);
+    assert_eq!(candidates[1]["id"], "bob");
+    assert_eq!(candidates[1]["owes"], 1);
+    assert!(candidates[0]["score"].as_i64().unwrap() > candidates[1]["score"].as_i64().unwrap());
+}
+
+#[test]
+fn swarm_assign_selects_best_candidate_and_opens_an_ask() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(
+        &bus,
+        &[
+            "claim",
+            "coord",
+            "--workspace",
+            ".",
+            "--capabilities",
+            "coordination",
+        ],
+    );
+    run(
+        &bus,
+        &[
+            "claim",
+            "alice",
+            "--workspace",
+            ".",
+            "--capabilities",
+            "review,docs",
+        ],
+    );
+    run(
+        &bus,
+        &[
+            "claim",
+            "bob",
+            "--workspace",
+            ".",
+            "--capabilities",
+            "review,tests",
+        ],
+    );
+    run(&bus, &["state", "set", "bob", "working"]);
+    run(
+        &bus,
+        &[
+            "channel",
+            "create",
+            "squad",
+            "--creator",
+            "coord",
+            "--members",
+            "alice,bob",
+        ],
+    );
+    run(
+        &bus,
+        &[
+            "send",
+            "--channel",
+            "squad",
+            "--from",
+            "coord",
+            "--to",
+            "bob",
+            "--subject",
+            "existing ask",
+            "--body",
+            "please finish this first",
+            "--needs-response-from",
+            "bob",
+        ],
+    );
+
+    let assigned = run(
+        &bus,
+        &[
+            "swarm",
+            "assign",
+            "--from",
+            "coord",
+            "--channel",
+            "squad",
+            "--capability",
+            "review",
+            "--subject",
+            "Review patch",
+            "--body",
+            "Please review the diff and reply with blockers.",
+            "--count",
+            "1",
+            "--json",
+        ],
+    );
+    let envelope: serde_json::Value = serde_json::from_slice(&assigned.stdout).unwrap();
+    assert_eq!(envelope["ok"], true);
+    assert_eq!(envelope["channel"], "squad");
+    assert_eq!(envelope["selected_agents"], serde_json::json!(["alice"]));
+    assert_eq!(
+        envelope["needs_response_from"],
+        serde_json::json!(["alice"])
+    );
+    let message_id = envelope["message_id"].as_str().unwrap();
+    assert!(message_id.starts_with("m-"));
+
+    let awaiting = run(&bus, &["awaiting", "alice", "--json"]);
+    let awaiting_json: serde_json::Value = serde_json::from_slice(&awaiting.stdout).unwrap();
+    assert_eq!(awaiting_json["you_owe"][0]["message_id"], message_id);
+    assert_eq!(awaiting_json["you_owe"][0]["await_kind"], "needs_response");
+}
+
+#[test]
+fn swarm_dispatch_requires_at_least_one_capability() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(
+        &bus,
+        &[
+            "claim",
+            "coord",
+            "--workspace",
+            ".",
+            "--capabilities",
+            "coordination",
+        ],
+    );
+    run(
+        &bus,
+        &[
+            "claim",
+            "worker",
+            "--workspace",
+            ".",
+            "--capabilities",
+            "echo",
+        ],
+    );
+    run(
+        &bus,
+        &[
+            "channel",
+            "create",
+            "squad",
+            "--creator",
+            "coord",
+            "--members",
+            "worker",
+        ],
+    );
+
+    let denied = run_fail(
+        &bus,
+        &[
+            "swarm",
+            "dispatch",
+            "--from",
+            "coord",
+            "--channel",
+            "squad",
+            "--tool",
+            "echo",
+            "--json",
+        ],
+    );
+    let err: serde_json::Value = serde_json::from_slice(&denied.stderr).unwrap();
+    assert_eq!(err["error"]["code"], "parse");
+    assert!(
+        err["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("capability")
+    );
+}
+
+#[test]
+fn swarm_dispatch_selects_best_candidate_and_runs_task() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(
+        &bus,
+        &[
+            "claim",
+            "coord",
+            "--workspace",
+            ".",
+            "--capabilities",
+            "coordination",
+        ],
+    );
+    run(
+        &bus,
+        &[
+            "claim",
+            "worker1",
+            "--workspace",
+            ".",
+            "--capabilities",
+            "echo,review",
+        ],
+    );
+    run(
+        &bus,
+        &[
+            "claim",
+            "worker2",
+            "--workspace",
+            ".",
+            "--capabilities",
+            "echo,review",
+        ],
+    );
+    run(
+        &bus,
+        &["state", "set", "worker2", "working", "--note", "busy"],
+    );
+    run(
+        &bus,
+        &[
+            "channel",
+            "create",
+            "squad",
+            "--creator",
+            "coord",
+            "--members",
+            "worker1,worker2",
+        ],
+    );
+    run(
+        &bus,
+        &[
+            "send",
+            "--channel",
+            "squad",
+            "--from",
+            "coord",
+            "--to",
+            "worker2",
+            "--subject",
+            "existing ask",
+            "--body",
+            "finish this first",
+            "--needs-response-from",
+            "worker2",
+        ],
+    );
+
+    let cap = bus.join("cap.json");
+    run(
+        &bus,
+        &[
+            "grant",
+            "new",
+            "--issuer",
+            "coord",
+            "--to",
+            "worker1",
+            "--action",
+            "tool.run",
+            "--tool",
+            "echo",
+            "--ttl",
+            "1h",
+            "--out",
+            cap.to_str().unwrap(),
+            "--json",
+        ],
+    );
+
+    let dispatch = run(
+        &bus,
+        &[
+            "swarm",
+            "dispatch",
+            "--from",
+            "coord",
+            "--channel",
+            "squad",
+            "--capability",
+            "echo",
+            "--tool",
+            "echo",
+            "--args",
+            r#"{"job":"swarm"}"#,
+            "--cap",
+            cap.to_str().unwrap(),
+            "--json",
+        ],
+    );
+    let dispatch_json: serde_json::Value = serde_json::from_slice(&dispatch.stdout).unwrap();
+    assert_eq!(dispatch_json["ok"], true);
+    assert_eq!(dispatch_json["selected_agent"], "worker1");
+    assert_eq!(dispatch_json["task"]["to"], "worker1");
+    assert_eq!(dispatch_json["task"]["tool"], "echo");
+    let task_id = dispatch_json["task"]["task_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let owed = run(&bus, &["awaiting", "worker1", "--json"]);
+    let owed_json: serde_json::Value = serde_json::from_slice(&owed.stdout).unwrap();
+    assert_eq!(owed_json["you_owe"][0]["message_id"], task_id);
+
+    let executor = run(
+        &bus,
+        &[
+            "run",
+            "worker1",
+            "--once",
+            "--tool",
+            "echo=/bin/cat",
+            "--trust",
+            "coord",
+            "--json",
+        ],
+    );
+    let executor_json: serde_json::Value = serde_json::from_slice(&executor.stdout).unwrap();
+    assert_eq!(executor_json["processed"], 1);
+
+    let status = run(&bus, &["task", "status", &task_id, "--json"]);
+    let status_json: serde_json::Value = serde_json::from_slice(&status.stdout).unwrap();
+    assert_eq!(status_json["workers"][0]["agent"], "worker1");
+    assert_eq!(status_json["workers"][0]["status"], "done");
+    assert_eq!(status_json["result"]["ok"], true);
+    assert_eq!(status_json["result"]["result"]["job"], "swarm");
 }
 
 #[test]
@@ -5843,6 +6401,177 @@ fn watch_emits_a_late_message_whose_id_sorts_below_the_cursor() {
 }
 
 #[test]
+fn late_joiner_receives_latest_summary_as_first_watch_event() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(&bus, &["claim", "alice", "--workspace", "."]);
+    run(&bus, &["claim", "bob", "--workspace", "."]);
+    run(&bus, &["claim", "carol", "--workspace", "."]);
+    run(
+        &bus,
+        &[
+            "channel",
+            "create",
+            "general",
+            "--creator",
+            "alice",
+            "--members",
+            "bob",
+        ],
+    );
+    run(
+        &bus,
+        &[
+            "send",
+            "--channel",
+            "general",
+            "--from",
+            "alice",
+            "--to",
+            "*",
+            "--body",
+            "old backlog should not be the onboard event",
+        ],
+    );
+    let seed = run(
+        &bus,
+        &[
+            "send",
+            "--channel",
+            "general",
+            "--from",
+            "alice",
+            "--to",
+            "*",
+            "--kind",
+            "summary",
+            "--subject",
+            "memory",
+            "--body",
+            "Goal: add rolling memory. Next: Bob accumulates the summary.",
+        ],
+    );
+    let seed_id = String::from_utf8_lossy(&seed.stdout).trim().to_string();
+    run(
+        &bus,
+        &[
+            "reply",
+            &seed_id,
+            "--from",
+            "bob",
+            "--to",
+            "*",
+            "--kind",
+            "summary",
+            "--body",
+            "Goal: add rolling memory. Decision: late joiners see this summary first. Next: Carol reviews.",
+        ],
+    );
+
+    run(&bus, &["channel", "join", "general", "--agent", "carol"]);
+
+    let watched = run(
+        &bus,
+        &[
+            "watch",
+            "--agent",
+            "carol",
+            "--channel",
+            "general",
+            "--once",
+            "--json",
+        ],
+    );
+    let stdout = String::from_utf8_lossy(&watched.stdout);
+    let mut lines = stdout.lines();
+    let first: serde_json::Value = serde_json::from_str(lines.next().unwrap()).unwrap();
+    assert!(
+        lines.next().is_none(),
+        "onboarding watch should fire only the summary event first; got: {stdout}"
+    );
+    assert_eq!(first["kind"], serde_json::json!("system"));
+    assert_eq!(first["subject"], serde_json::json!("conversation summary"));
+    assert_eq!(
+        first["body"],
+        serde_json::json!(
+            "Goal: add rolling memory. Decision: late joiners see this summary first. Next: Carol reviews."
+        )
+    );
+    assert_eq!(first["unread"], serde_json::json!(true));
+    assert!(!stdout.contains("old backlog"));
+
+    let unread = run(
+        &bus,
+        &["inbox", "carol", "--channel", "general", "--unread"],
+    );
+    assert!(String::from_utf8_lossy(&unread.stdout).contains("no messages"));
+}
+
+#[test]
+fn summary_messages_are_short_and_non_obligation_bearing() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    claim_agents(&bus, &["alice", "bob"]);
+    run(
+        &bus,
+        &[
+            "conversation",
+            "create",
+            "memory",
+            "--participants",
+            "alice,bob",
+            "--starter",
+            "alice",
+        ],
+    );
+
+    let obligation = run_fail(
+        &bus,
+        &[
+            "send",
+            "--conversation",
+            "memory",
+            "--from",
+            "alice",
+            "--to",
+            "bob",
+            "--kind",
+            "summary",
+            "--body",
+            "short summary",
+            "--requires-ack",
+        ],
+    );
+    assert!(
+        String::from_utf8_lossy(&obligation.stderr)
+            .contains("only valid on kind \"message\" or \"task\""),
+        "summary messages must not create open asks"
+    );
+
+    let too_long = "x".repeat(2001);
+    let long = run_fail(
+        &bus,
+        &[
+            "send",
+            "--conversation",
+            "memory",
+            "--from",
+            "alice",
+            "--to",
+            "bob",
+            "--kind",
+            "summary",
+            "--body",
+            &too_long,
+        ],
+    );
+    assert!(
+        String::from_utf8_lossy(&long.stderr).contains("summary is 2001 bytes; limit is 2000"),
+        "summaries should stay compact for the next onboarded agent"
+    );
+}
+
+#[test]
 fn channel_joiner_is_not_flooded_with_pre_join_broadcasts() {
     let bus = temp_bus();
     run(&bus, &["init"]);
@@ -6499,6 +7228,53 @@ fn capability_only_the_holder_can_attenuate_via_cli() {
     );
     let mallory_json: serde_json::Value = serde_json::from_slice(&mallory.stderr).unwrap();
     assert_eq!(mallory_json["ok"], false);
+}
+
+#[test]
+fn task_dispatch_requires_json_object_arguments() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(&bus, &["claim", "alice", "--workspace", "."]);
+    run(&bus, &["claim", "worker", "--workspace", "."]);
+    run(
+        &bus,
+        &[
+            "conversation",
+            "create",
+            "c",
+            "--participants",
+            "alice,worker",
+            "--starter",
+            "alice",
+        ],
+    );
+
+    let denied = run_fail(
+        &bus,
+        &[
+            "task",
+            "dispatch",
+            "--from",
+            "alice",
+            "--to",
+            "worker",
+            "--conversation",
+            "c",
+            "--tool",
+            "echo",
+            "--args",
+            "[]",
+            "--json",
+        ],
+    );
+    let err: serde_json::Value = serde_json::from_slice(&denied.stderr).unwrap();
+    assert_eq!(err["error"]["code"], "parse");
+    assert!(
+        err["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("JSON object")
+    );
 }
 
 #[test]

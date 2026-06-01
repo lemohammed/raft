@@ -5,7 +5,7 @@ use crate::{LOCK_TTL_SECONDS, SCHEMA_VERSION};
 use chrono::Utc;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
@@ -355,11 +355,68 @@ fn collect_orphan_temp_files_into(dir: &Path, found: &mut Vec<PathBuf>) -> Resul
 }
 
 pub(crate) fn sorted_read_dir(path: &Path) -> Result<Vec<fs::DirEntry>> {
-    let mut entries = match fs::read_dir(path) {
-        Ok(entries) => entries.collect::<std::result::Result<Vec<_>, _>>()?,
+    let entries = match fs::read_dir(path) {
+        Ok(entries) => entries
+            .map(|entry| entry.map(|entry| (entry.file_name(), entry)))
+            .collect::<std::result::Result<Vec<(OsString, fs::DirEntry)>, _>>()?,
         Err(err) if err.kind() == io::ErrorKind::NotFound => Vec::new(),
         Err(err) => return Err(err.into()),
     };
-    entries.sort_by_key(|entry| entry.path());
-    Ok(entries)
+    Ok(entries_sorted_by_cached_name(entries))
+}
+
+fn entries_sorted_by_cached_name(mut entries: Vec<(OsString, fs::DirEntry)>) -> Vec<fs::DirEntry> {
+    entries.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
+    entries.into_iter().map(|(_, entry)| entry).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sorted_read_dir;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn scratch_dir(name: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("run")
+            .join("test-buses")
+            .join(format!(
+                "raft-storage-{name}-{}-{nanos}",
+                std::process::id()
+            ))
+    }
+
+    #[test]
+    fn sorted_read_dir_orders_by_file_name() {
+        let dir = scratch_dir("ordered");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("zeta.json"), b"{}").unwrap();
+        fs::create_dir(dir.join("middle.lock")).unwrap();
+        fs::write(dir.join("alpha.json"), b"{}").unwrap();
+
+        let names = sorted_read_dir(&dir)
+            .unwrap()
+            .into_iter()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        assert_eq!(names, vec!["alpha.json", "middle.lock", "zeta.json"]);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn sorted_read_dir_missing_dir_is_empty() {
+        let dir = scratch_dir("missing");
+        let _ = fs::remove_dir_all(&dir);
+
+        let entries = sorted_read_dir(&dir).unwrap();
+
+        assert!(entries.is_empty());
+    }
 }

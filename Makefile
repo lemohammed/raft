@@ -1,13 +1,18 @@
 PREFIX ?= $(HOME)/.local
 BINDIR ?= $(PREFIX)/bin
+TOOLCHAIN ?= 1.88.0
+CARGO ?= rustup run $(TOOLCHAIN) cargo
 
-.PHONY: build release install uninstall test lint fmt check clean
+.PHONY: build release install uninstall test lint fmt fmt-check temp-policy check clean toolchain
+
+toolchain:
+	rustup toolchain install $(TOOLCHAIN) --profile minimal --component clippy,rustfmt
 
 build:
-	cargo build
+	$(CARGO) build --locked
 
 release:
-	cargo build --release
+	$(CARGO) build --release --locked
 
 install: release
 	./scripts/install.sh "$(BINDIR)"
@@ -16,15 +21,21 @@ uninstall:
 	rm -f "$(BINDIR)/raft"
 
 test:
-	cargo test
+	$(CARGO) test --locked
 
 lint:
-	cargo clippy -- -D warnings
+	$(CARGO) clippy --locked --all-targets --all-features -- -D warnings
 
 fmt:
-	cargo fmt
+	$(CARGO) fmt
 
-check: fmt lint test
+fmt-check:
+	$(CARGO) fmt --check
+
+temp-policy:
+	! rg -n '(/tmp|/private/tmp|/var/tmp|std::env::temp_dir|TMPDIR|\.join\("tmp"\))' README.md docs src tests scripts
+
+check: fmt-check lint test temp-policy
 
 clean:
-	cargo clean
+	$(CARGO) clean

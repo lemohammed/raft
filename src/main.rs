@@ -42,6 +42,7 @@ use std::time::{Duration, Instant};
 pub(crate) const DEFAULT_RATE_WINDOW_SECONDS: u64 = 60;
 pub(crate) const DEFAULT_RATE_MAX_MESSAGES: u64 = 10;
 pub(crate) const DEFAULT_MAX_MESSAGE_BYTES: usize = 32_768;
+pub(crate) const MAX_SUMMARY_BYTES: usize = 2_000;
 pub(crate) const DEFAULT_AGENT_TTL_SECONDS: u64 = 120;
 pub(crate) const LOCK_TTL_SECONDS: u64 = 30;
 pub(crate) const LOCK_TIMEOUT_SECONDS: u64 = 5;
@@ -144,6 +145,11 @@ fn command_wants_json(command: &Commands) -> bool {
             TaskCommand::Status(args) => args.json,
             TaskCommand::Cancel(args) => args.json,
         },
+        Commands::Swarm { command } => match command {
+            SwarmCommand::Candidates(args) => args.json,
+            SwarmCommand::Assign(args) => args.json,
+            SwarmCommand::Dispatch(args) => args.json,
+        },
         Commands::Run(args) => args.json,
         _ => false,
     }
@@ -208,6 +214,11 @@ fn run(root: PathBuf, command: Commands) -> Result<()> {
             TaskCommand::Dispatch(args) => cmd_task_dispatch(&root, args),
             TaskCommand::Status(args) => cmd_task_status(&root, args),
             TaskCommand::Cancel(args) => cmd_task_cancel(&root, args),
+        },
+        Commands::Swarm { command } => match command {
+            SwarmCommand::Candidates(args) => cmd_swarm_candidates(&root, args),
+            SwarmCommand::Assign(args) => cmd_swarm_assign(&root, args),
+            SwarmCommand::Dispatch(args) => cmd_swarm_dispatch(&root, args),
         },
         Commands::Run(args) => cmd_run(&root, args),
     }
@@ -366,19 +377,21 @@ fn cmd_grant_verify(root: &Path, args: GrantVerifyArgs) -> Result<()> {
     Ok(())
 }
 
-/// `raft task dispatch` — delegate a Hermes tool call to a worker as a
-/// capability-gated task ask. The obligation engine tracks it; the worker's
-/// executor (`raft run`) authorizes and runs it.
-fn cmd_task_dispatch(root: &Path, args: TaskDispatchArgs) -> Result<()> {
-    let from = validate_id(&args.from, "agent id")?;
-    let worker = validate_id(&args.to, "agent id")?;
-    let conversation_id = target_room(args.conversation.as_deref(), args.channel.as_deref())?;
-    ensure_root(root)?;
-    let arguments: serde_json::Value = serde_json::from_str(&args.args)
+fn build_task_body(
+    tool: &str,
+    raw_args: &str,
+    cap: Option<&Path>,
+    max_runtime_s: Option<u64>,
+    max_output_bytes: Option<u64>,
+) -> Result<task::TaskBody> {
+    let arguments: serde_json::Value = serde_json::from_str(raw_args)
         .map_err(|err| RaftError::coded("parse", format!("--args must be JSON: {err}")))?;
+    if !arguments.is_object() {
+        bail_code!("parse", "--args must be a JSON object");
+    }
     // If a capability is attached, fail fast on a malformed/forged token; the
     // worker's executor performs the full contextual authorization.
-    let capability = match &args.cap {
+    let capability = match cap {
         Some(path) => {
             let token: capability::Token = read_json(path)?.ok_or_else(|| {
                 RaftError::coded(
@@ -391,31 +404,66 @@ fn cmd_task_dispatch(root: &Path, args: TaskDispatchArgs) -> Result<()> {
         }
         None => None,
     };
-    let body = task::TaskBody {
+    Ok(task::TaskBody {
         tool_call: task::ToolCall {
-            name: args.tool.clone(),
+            name: tool.to_string(),
             arguments,
         },
         capability,
         limits: task::TaskLimits {
-            max_runtime_s: args.max_runtime_s,
-            max_output_bytes: args.max_output_bytes,
+            max_runtime_s,
+            max_output_bytes,
         },
-    };
-    let message = send_message(
+    })
+}
+
+fn send_task_message(
+    root: &Path,
+    conversation_id: String,
+    from: String,
+    worker: String,
+    tool: &str,
+    body: task::TaskBody,
+) -> Result<Message> {
+    send_message(
         root,
         SendMessageInput {
             conversation_id,
             sender: from,
             to: worker.clone(),
-            subject: format!("task: {}", args.tool),
+            subject: format!("task: {tool}"),
             body: body.to_body_string()?,
             kind: "task".to_string(),
             after: None,
             subject_id: None,
             requires_ack: false,
-            needs_response_from: worker.clone(),
+            needs_response_from: worker,
         },
+    )
+}
+
+/// `raft task dispatch` — delegate a Hermes tool call to a worker as a
+/// capability-gated task ask. The obligation engine tracks it; the worker's
+/// executor (`raft run`) authorizes and runs it.
+fn cmd_task_dispatch(root: &Path, args: TaskDispatchArgs) -> Result<()> {
+    let from = validate_id(&args.from, "agent id")?;
+    let worker = validate_id(&args.to, "agent id")?;
+    let conversation_id = target_room(args.conversation.as_deref(), args.channel.as_deref())?;
+    ensure_root(root)?;
+    let body = build_task_body(
+        &args.tool,
+        &args.args,
+        args.cap.as_deref(),
+        args.max_runtime_s,
+        args.max_output_bytes,
+    )?;
+    let message = send_task_message(
+        root,
+        conversation_id,
+        from,
+        worker.clone(),
+        &args.tool,
+        body,
     )?;
     if args.json {
         emit_ok(serde_json::json!({
@@ -1319,7 +1367,7 @@ fn heartbeat_once(
         LOCK_TIMEOUT_SECONDS,
     )?;
     let previous: Agent =
-        read_json(&agent_path(root, agent_id))?.ok_or_else(|| not_claimed(root, &agent_id))?;
+        read_json(&agent_path(root, agent_id))?.ok_or_else(|| not_claimed(root, agent_id))?;
     let ttl = ttl_override.unwrap_or(previous.ttl_seconds);
     let pubkey = match previous.pubkey {
         Some(pubkey) => Some(pubkey),
@@ -1355,7 +1403,7 @@ fn cmd_heartbeat_watch(
     interval_override: Option<f64>,
 ) -> Result<()> {
     let previous: Agent =
-        read_json(&agent_path(root, agent_id))?.ok_or_else(|| not_claimed(root, &agent_id))?;
+        read_json(&agent_path(root, agent_id))?.ok_or_else(|| not_claimed(root, agent_id))?;
     let ttl = ttl_override.unwrap_or(previous.ttl_seconds);
     let interval = interval_override.unwrap_or_else(|| (ttl as f64 / 2.0).max(1.0));
     if !interval.is_finite() || interval <= 0.0 {
@@ -1623,6 +1671,7 @@ fn cmd_channel_join(root: &Path, args: ChannelJoinArgs) -> Result<()> {
         .any(|participant| participant == &agent_id);
     if !already_member {
         let now = iso_now();
+        let prior_meta = meta.clone();
         meta.participants.push(agent_id.clone());
         // Preserve the original join time across a leave/rejoin. Overwriting it
         // with `now` would push the membership baseline past any ask created
@@ -1640,6 +1689,7 @@ fn cmd_channel_join(root: &Path, args: ChannelJoinArgs) -> Result<()> {
             format!("@{agent_id} joined channel {channel_id}."),
             "channel joined",
         )?;
+        write_onboarding_summary_message(&conv, &channel_id, &agent_id, &prior_meta)?;
     }
     if args.json {
         emit_ok(serde_json::json!({
@@ -1893,6 +1943,7 @@ fn cmd_conversation_add(root: &Path, args: ConversationAddArgs) -> Result<()> {
         .any(|participant| participant == &agent_id);
     if !already_participant {
         let now = iso_now();
+        let prior_meta = meta.clone();
         meta.participants.push(agent_id.clone());
         // Preserve the original join time across a remove/re-add. Overwriting it
         // with `now` would push the membership baseline past any ask created
@@ -1910,6 +1961,7 @@ fn cmd_conversation_add(root: &Path, args: ConversationAddArgs) -> Result<()> {
             format!("@{agent_id} added to conversation {conversation_id}."),
             "participant added",
         )?;
+        write_onboarding_summary_message(&conv, &conversation_id, &agent_id, &prior_meta)?;
     }
     if args.json {
         emit_ok(serde_json::json!({
@@ -2125,7 +2177,7 @@ fn cmd_reply(root: &Path, args: ReplyArgs) -> Result<()> {
             to,
             subject,
             body: args.body,
-            kind: "message".to_string(),
+            kind: args.kind,
             after: Some(parent.id.clone()),
             subject_id: None,
             requires_ack: args.requires_ack,
@@ -2401,6 +2453,20 @@ pub(crate) fn send_message_locked(root: &Path, input: SendMessageInput) -> Resul
     }
     recipients = unique(recipients);
     let kind = normalize_send_kind(&input.kind)?;
+    if kind == "summary" && input.body.len() > MAX_SUMMARY_BYTES {
+        return Err(RaftError::coded(
+            "too_large",
+            format!(
+                "summary is {} bytes; limit is {}",
+                input.body.len(),
+                MAX_SUMMARY_BYTES
+            ),
+        )
+        .with_details(serde_json::json!({
+            "size": input.body.len(),
+            "limit": MAX_SUMMARY_BYTES,
+        })));
+    }
     // Obligation flags belong only to obligation-bearing kinds (`message`,
     // `task`). An `event` (e.g. an IM bridge relaying a human) is not asking a
     // peer for a reply, and a bridge agent rarely runs `ack`, so honoring these
@@ -2861,6 +2927,387 @@ fn cmd_me(root: &Path, args: MeArgs) -> Result<()> {
             kind,
             conv["unread"].as_u64().unwrap_or(0),
             conv["messages"].as_u64().unwrap_or(0)
+        );
+    }
+    Ok(())
+}
+
+#[derive(Serialize, Clone)]
+struct SwarmCandidate {
+    id: String,
+    mention: String,
+    active: bool,
+    current_state: String,
+    state_note: Option<String>,
+    capabilities: Vec<String>,
+    matching_capabilities: Vec<String>,
+    missing_capabilities: Vec<String>,
+    owes: usize,
+    waiting_on: usize,
+    score: i64,
+    reasons: Vec<String>,
+}
+
+fn parse_repeated_csv(values: &[String], label: &str) -> Result<Vec<String>> {
+    let mut parsed = Vec::new();
+    for value in values {
+        for item in value
+            .split(',')
+            .map(str::trim)
+            .filter(|item| !item.is_empty())
+        {
+            parsed.push(validate_id(item.trim_start_matches('@'), label)?);
+        }
+    }
+    Ok(unique(parsed))
+}
+
+fn swarm_state_score(state: &str) -> i64 {
+    match state {
+        "idle" => 30,
+        "working" => 5,
+        "away" => -20,
+        "blocked" => -50,
+        _ => -10,
+    }
+}
+
+fn rank_swarm_candidates(
+    root: &Path,
+    required_capabilities: &[String],
+    excluded: &BTreeSet<String>,
+    allow_partial: bool,
+    include_stale: bool,
+    only_participants: Option<&BTreeSet<String>>,
+    limit: usize,
+) -> Result<Vec<SwarmCandidate>> {
+    let asks = gather_open_asks(root, None, None)?;
+    let mut owes: BTreeMap<String, usize> = BTreeMap::new();
+    let mut waiting_on: BTreeMap<String, usize> = BTreeMap::new();
+    for ask in &asks {
+        *owes.entry(ask.awaited.clone()).or_default() += 1;
+        *waiting_on.entry(ask.from.clone()).or_default() += 1;
+    }
+
+    let now = Utc::now();
+    let mut candidates = Vec::new();
+    for entry in sorted_read_dir(&root.join("agents"))? {
+        if !is_agent_record_file(&entry.path()) {
+            continue;
+        }
+        let Some(agent): Option<Agent> = read_json(&entry.path())? else {
+            continue;
+        };
+        if excluded.contains(&agent.id) {
+            continue;
+        }
+        if let Some(participants) = only_participants
+            && !participants.contains(&agent.id)
+        {
+            continue;
+        }
+        let active = parse_time(&agent.expires_at)
+            .map(|expires_at| expires_at >= now)
+            .unwrap_or(false);
+        if !active && !include_stale {
+            continue;
+        }
+
+        let capability_set: BTreeSet<&str> =
+            agent.capabilities.iter().map(String::as_str).collect();
+        let matching_capabilities: Vec<String> = required_capabilities
+            .iter()
+            .filter(|capability| capability_set.contains(capability.as_str()))
+            .cloned()
+            .collect();
+        let missing_capabilities: Vec<String> = required_capabilities
+            .iter()
+            .filter(|capability| !capability_set.contains(capability.as_str()))
+            .cloned()
+            .collect();
+        if !allow_partial && !missing_capabilities.is_empty() {
+            continue;
+        }
+        if allow_partial && !required_capabilities.is_empty() && matching_capabilities.is_empty() {
+            continue;
+        }
+
+        let owes_count = owes.get(&agent.id).copied().unwrap_or(0);
+        let waiting_count = waiting_on.get(&agent.id).copied().unwrap_or(0);
+        let mut score = 0i64;
+        score += if active { 100 } else { -100 };
+        score += (matching_capabilities.len() as i64) * 50;
+        score -= (missing_capabilities.len() as i64) * 40;
+        score += swarm_state_score(&agent.current_state);
+        score -= (owes_count as i64) * 10;
+        score -= (waiting_count as i64) * 3;
+
+        let mut reasons = Vec::new();
+        reasons.push(if active { "live" } else { "stale" }.to_string());
+        reasons.push(format!("state={}", agent.current_state));
+        if required_capabilities.is_empty() {
+            reasons.push("no capability filter".to_string());
+        } else {
+            reasons.push(format!("matched={}", matching_capabilities.join(",")));
+            if !missing_capabilities.is_empty() {
+                reasons.push(format!("missing={}", missing_capabilities.join(",")));
+            }
+        }
+        if owes_count > 0 || waiting_count > 0 {
+            reasons.push(format!("load=owes:{owes_count},waiting:{waiting_count}"));
+        }
+
+        let mention = if agent.mention.is_empty() {
+            format!("@{}", agent.id)
+        } else {
+            agent.mention.clone()
+        };
+        candidates.push(SwarmCandidate {
+            id: agent.id,
+            mention,
+            active,
+            current_state: agent.current_state,
+            state_note: agent.state_note,
+            capabilities: agent.capabilities,
+            matching_capabilities,
+            missing_capabilities,
+            owes: owes_count,
+            waiting_on: waiting_count,
+            score,
+            reasons,
+        });
+    }
+
+    candidates.sort_by(|left, right| {
+        right
+            .score
+            .cmp(&left.score)
+            .then_with(|| left.owes.cmp(&right.owes))
+            .then_with(|| left.waiting_on.cmp(&right.waiting_on))
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    if candidates.len() > limit {
+        candidates.truncate(limit);
+    }
+    Ok(candidates)
+}
+
+fn cmd_swarm_candidates(root: &Path, args: SwarmCandidatesArgs) -> Result<()> {
+    ensure_root(root)?;
+    let required = parse_repeated_csv(&args.capabilities, "capability")?;
+    let excluded: BTreeSet<String> = parse_repeated_csv(&args.exclude, "agent id")?
+        .into_iter()
+        .collect();
+    let candidates = rank_swarm_candidates(
+        root,
+        &required,
+        &excluded,
+        args.allow_partial,
+        args.all,
+        None,
+        args.limit,
+    )?;
+    if args.json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "root": root,
+                "required_capabilities": required,
+                "allow_partial": args.allow_partial,
+                "include_stale": args.all,
+                "candidates": candidates,
+            }))?
+        );
+        return Ok(());
+    }
+    println!("swarm candidates ({} shown):", candidates.len());
+    if candidates.is_empty() {
+        println!("  none");
+    }
+    for candidate in candidates {
+        let caps = if candidate.capabilities.is_empty() {
+            String::new()
+        } else {
+            format!(" {{{}}}", candidate.capabilities.join(","))
+        };
+        println!(
+            "  {} score={} state={} owes={} waiting={}{}",
+            candidate.id,
+            candidate.score,
+            candidate.current_state,
+            candidate.owes,
+            candidate.waiting_on,
+            caps
+        );
+    }
+    Ok(())
+}
+
+fn cmd_swarm_assign(root: &Path, args: SwarmAssignArgs) -> Result<()> {
+    ensure_root(root)?;
+    let sender = validate_id(&args.sender, "sender")?;
+    let channel_id = validate_id(&args.channel, "channel id")?;
+    if args.count == 0 {
+        bail!("--count must be at least 1");
+    }
+    let required = parse_repeated_csv(&args.capabilities, "capability")?;
+    let mut excluded = parse_repeated_csv(&args.exclude, "agent id")?;
+    excluded.push(sender.clone());
+    let excluded: BTreeSet<String> = unique(excluded).into_iter().collect();
+    let (_, meta) = load_conversation(root, &channel_id)?;
+    if !meta.channel {
+        bail_code!("not_found", "{channel_id:?} is not a channel");
+    }
+    ensure_participant(&meta, &sender)?;
+    let participants: BTreeSet<String> = meta.participants.iter().cloned().collect();
+    let candidates = rank_swarm_candidates(
+        root,
+        &required,
+        &excluded,
+        false,
+        false,
+        Some(&participants),
+        args.count,
+    )?;
+    if candidates.is_empty() {
+        bail_code!(
+            "not_found",
+            "no live channel members matched the requested swarm capabilities"
+        );
+    }
+    let selected_agents: Vec<String> = candidates
+        .iter()
+        .map(|candidate| candidate.id.clone())
+        .collect();
+    if args.dry_run {
+        if args.json {
+            emit_ok(serde_json::json!({
+                "dry_run": true,
+                "channel": channel_id,
+                "selected_agents": selected_agents,
+                "required_capabilities": required,
+                "candidates": candidates,
+            }))?;
+        } else {
+            println!("would assign to: {}", selected_agents.join(","));
+        }
+        return Ok(());
+    }
+
+    let selected_csv = selected_agents.join(",");
+    let message = send_message(
+        root,
+        SendMessageInput {
+            conversation_id: channel_id.clone(),
+            sender,
+            to: selected_csv.clone(),
+            subject: args.subject,
+            body: args.body,
+            kind: "message".to_string(),
+            after: None,
+            subject_id: None,
+            requires_ack: false,
+            needs_response_from: selected_csv,
+        },
+    )?;
+    let offline = offline_recipients(root, &message)?;
+    if args.json {
+        emit_ok(serde_json::json!({
+            "channel": channel_id,
+            "message_id": message.id,
+            "selected_agents": selected_agents,
+            "needs_response_from": message.needs_response_from,
+            "offline_recipients": offline,
+            "required_capabilities": required,
+            "candidates": candidates,
+        }))?;
+    } else {
+        println!("{} -> {}", message.id, selected_agents.join(","));
+        warn_offline_recipients(&offline);
+    }
+    Ok(())
+}
+
+fn cmd_swarm_dispatch(root: &Path, args: SwarmDispatchArgs) -> Result<()> {
+    ensure_root(root)?;
+    let sender = validate_id(&args.sender, "sender")?;
+    let channel_id = validate_id(&args.channel, "channel id")?;
+    let required = parse_repeated_csv(&args.capabilities, "capability")?;
+    if required.is_empty() {
+        bail_code!("parse", "swarm dispatch requires at least one --capability");
+    }
+    let mut excluded = parse_repeated_csv(&args.exclude, "agent id")?;
+    excluded.push(sender.clone());
+    let excluded: BTreeSet<String> = unique(excluded).into_iter().collect();
+
+    let (_, meta) = load_conversation(root, &channel_id)?;
+    if !meta.channel {
+        bail_code!("not_found", "{channel_id:?} is not a channel");
+    }
+    ensure_participant(&meta, &sender)?;
+    let participants: BTreeSet<String> = meta.participants.iter().cloned().collect();
+    let mut candidates = rank_swarm_candidates(
+        root,
+        &required,
+        &excluded,
+        false,
+        false,
+        Some(&participants),
+        1,
+    )?;
+    let candidate = candidates.pop().ok_or_else(|| {
+        RaftError::coded(
+            "not_found",
+            "no live channel member matched the requested swarm capabilities",
+        )
+    })?;
+    let worker = candidate.id.clone();
+    let body = build_task_body(
+        &args.tool,
+        &args.args,
+        args.cap.as_deref(),
+        args.max_runtime_s,
+        args.max_output_bytes,
+    )?;
+    if let Some(token) = &body.capability {
+        let selected_pubkey = resolve_pubkey(root, &worker)?;
+        let holder = token
+            .blocks
+            .last()
+            .map(|block| block.holder.as_str())
+            .ok_or_else(|| RaftError::coded("error", "capability token has no blocks"))?;
+        if holder != selected_pubkey {
+            bail_code!(
+                "not_authorized",
+                "capability token holder does not match the selected swarm worker"
+            );
+        }
+    }
+    let message = send_task_message(
+        root,
+        channel_id.clone(),
+        sender,
+        worker.clone(),
+        &args.tool,
+        body,
+    )?;
+    if args.json {
+        emit_ok(serde_json::json!({
+            "channel": channel_id,
+            "selected_agent": worker,
+            "required_capabilities": required,
+            "candidate": candidate,
+            "task": {
+                "task_id": message.id,
+                "conversation_id": message.conversation_id,
+                "to": worker,
+                "tool": args.tool,
+            },
+        }))?;
+    } else {
+        println!(
+            "dispatched swarm task {} to @{worker} (tool {})",
+            message.id, args.tool
         );
     }
     Ok(())
@@ -3356,7 +3803,7 @@ fn cmd_watch(root: &Path, args: WatchArgs) -> Result<()> {
             if state
                 .last_event_id
                 .as_deref()
-                .map_or(true, |high| message.id.as_str() > high)
+                .is_none_or(|high| message.id.as_str() > high)
             {
                 state.last_event_id = Some(message.id.clone());
             }
@@ -4225,7 +4672,9 @@ fn build_views(root: &Path, rows: Vec<Message>, agent_id: &str) -> Result<Vec<Vi
 }
 
 pub(crate) fn message_is_unread(root: &Path, message: &Message, agent_id: &str) -> bool {
-    if message.kind == "system" || message.kind == "receipt" {
+    if message.kind == "receipt"
+        || (message.kind == "system" && !is_onboarding_summary_message(message))
+    {
         return false;
     }
     if message.from == agent_id {
@@ -4746,6 +5195,63 @@ fn write_state_change_messages(
         )?;
     }
     Ok(())
+}
+
+fn summary_reaches_all_participants(message: &Message, meta: &Meta) -> bool {
+    meta.participants.iter().all(|participant| {
+        message.from == *participant
+            || message
+                .to
+                .iter()
+                .any(|recipient| recipient == "*" || recipient == participant)
+    })
+}
+
+fn latest_shared_summary_body(conv: &Path, meta: &Meta) -> Result<Option<String>> {
+    let mut latest: Option<Message> = None;
+    for entry in sorted_read_dir(&conv.join("messages"))? {
+        if entry.path().extension() != Some(OsStr::new("json")) {
+            continue;
+        }
+        let Some(message): Option<Message> = read_json(&entry.path())? else {
+            continue;
+        };
+        if message.kind != "summary" || !summary_reaches_all_participants(&message, meta) {
+            continue;
+        }
+        let replace = latest
+            .as_ref()
+            .map(|current| {
+                (message.created_at.as_str(), message.id.as_str())
+                    > (current.created_at.as_str(), current.id.as_str())
+            })
+            .unwrap_or(true);
+        if replace {
+            latest = Some(message);
+        }
+    }
+    Ok(latest.map(|message| message.body))
+}
+
+fn write_onboarding_summary_message(
+    conv: &Path,
+    conversation_id: &str,
+    agent_id: &str,
+    prior_meta: &Meta,
+) -> Result<String> {
+    let body = latest_shared_summary_body(conv, prior_meta)?
+        .unwrap_or_else(|| "No rolling summary yet.".to_string());
+    write_system_message(
+        conv,
+        conversation_id,
+        vec![agent_id.to_string()],
+        body,
+        "conversation summary",
+    )
+}
+
+fn is_onboarding_summary_message(message: &Message) -> bool {
+    message.kind == "system" && message.subject == "conversation summary"
 }
 
 pub(crate) fn write_system_message(

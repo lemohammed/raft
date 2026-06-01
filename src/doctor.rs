@@ -628,12 +628,14 @@ fn doctor_check_message(
             root,
             report,
             path,
-            "message",
-            &message.from,
-            message.signer_key.as_deref(),
-            message.hash.as_deref(),
-            message.sig.as_deref(),
-            message,
+            SignedRecordCheck {
+                record_type: "message",
+                author: &message.from,
+                signer_key: message.signer_key.as_deref(),
+                hash: message.hash.as_deref(),
+                sig: message.sig.as_deref(),
+                record: message,
+            },
         );
     }
 }
@@ -763,26 +765,40 @@ fn doctor_check_receipt(
         root,
         report,
         path,
-        "receipt",
-        &receipt.agent,
-        receipt.signer_key.as_deref(),
-        receipt.hash.as_deref(),
-        receipt.sig.as_deref(),
-        receipt,
+        SignedRecordCheck {
+            record_type: "receipt",
+            author: &receipt.agent,
+            signer_key: receipt.signer_key.as_deref(),
+            hash: receipt.hash.as_deref(),
+            sig: receipt.sig.as_deref(),
+            record: receipt,
+        },
     );
+}
+
+struct SignedRecordCheck<'a, T> {
+    record_type: &'a str,
+    author: &'a str,
+    signer_key: Option<&'a str>,
+    hash: Option<&'a str>,
+    sig: Option<&'a str>,
+    record: &'a T,
 }
 
 fn doctor_check_signed_record<T: Serialize>(
     root: &Path,
     report: &mut DoctorReport,
     path: &Path,
-    record_type: &str,
-    author: &str,
-    signer_key: Option<&str>,
-    hash: Option<&str>,
-    sig: Option<&str>,
-    record: &T,
+    signed: SignedRecordCheck<'_, T>,
 ) {
+    let SignedRecordCheck {
+        record_type,
+        author,
+        signer_key,
+        hash,
+        sig,
+        record,
+    } = signed;
     let Some(author_pubkey) = doctor_agent_pubkey(root, report, path, author) else {
         if signer_key.is_some() || hash.is_some() || sig.is_some() {
             report.warn(
@@ -905,9 +921,7 @@ fn doctor_agent_pubkey(
     agent_id: &str,
 ) -> Option<String> {
     let agent_path = root.join("agents").join(format!("{agent_id}.json"));
-    let Some(agent) = doctor_read_json::<Agent>(root, &agent_path, report) else {
-        return None;
-    };
+    let agent = doctor_read_json::<Agent>(root, &agent_path, report)?;
     match agent.pubkey {
         Some(pubkey) => {
             if let Err(err) = crypto::parse_pubkey(&pubkey) {

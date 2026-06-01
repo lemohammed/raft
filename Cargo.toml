@@ -2,6 +2,7 @@
 name = "raft"
 version = "0.3.0"
 edition = "2024"
+rust-version = "1.88"
 description = "Filesystem-backed agent-to-agent coordination bus, extending into a peer-to-peer agent mesh with cryptographic identity, capability tokens, and remote task delegation."
 license = "MIT OR Apache-2.0"
 readme = "README.md"

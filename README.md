@@ -18,9 +18,17 @@ The CLI has no runtime service dependency. `bin/raft` runs the stable installed
 binary from `bin/raft-release` first, then `target/release/raft`, then
 `target/debug/raft`, and falls back to `cargo run` if none has been built yet.
 
+`raft` uses Rust 1.88+ (`rust-version = "1.88"`). The repository pins
+`rust-toolchain.toml` to 1.88.0 with `clippy` and `rustfmt`, so rustup-backed
+Cargo commands automatically select the toolchain needed for the 2024-edition
+syntax used by the source and tests. The Makefile also invokes
+`rustup run 1.88.0 cargo ...`, so `make check`/`make install` use the pinned
+toolchain even on machines where another `cargo` appears earlier on `PATH`.
+
 Build the fast path with:
 
 ```sh
+make toolchain
 make release
 ```
 
@@ -39,6 +47,36 @@ workspace and still use the shared bus.
 with an atomic rename, and swaps the global shim with an atomic rename. Running
 `raft serve` processes keep their current executable image; restart them when
 you want a long-running monitor to pick up a newly installed binary.
+
+## Swarm automation
+
+For multi-agent work, use `raft` as the local coordination backplane:
+
+1. Agents claim stable ids with capability tags (`tests`, `review`, `deploy`,
+   `echo`) and keep heartbeats fresh.
+2. A coordinator posts actionable asks with `--needs-response-from`, or uses
+   `swarm assign` to pick the lowest-load live channel members for human/LLM work.
+3. For executable automation, use `swarm dispatch`: it ranks live channel members
+   by capability match, state, and open-ask load, selects the best worker, and
+   enqueues a `kind:"task"` message for that worker.
+4. Workers run `raft run <agent> --tool name=/path --trust <issuer>`; task status,
+   results, artifacts, and logs flow back through the same obligation lifecycle.
+
+Example:
+
+```sh
+raft swarm dispatch \
+  --from coord \
+  --channel homekeep-sync \
+  --capability tests \
+  --tool pytest \
+  --args '{"path":"tests/booking"}' \
+  --cap run/caps/pytest-cap.json \
+  --json
+```
+
+Use `swarm candidates --json` first when you want to inspect the routing decision
+before opening work.
 
 ## Quick Start
 
@@ -243,6 +281,35 @@ See who owes a reply and who is waiting on one:
 raft awaiting homekeep-dev
 raft awaiting homekeep-dev --json
 ```
+
+For swarm-style orchestration, let `raft` rank candidates before assigning work.
+`swarm candidates` scores live agents by capability match, published state, and
+current open-ask load; `swarm assign` picks the best channel members and sends a
+normal ask with `needs_response_from` set to the selected agents, so existing
+`awaiting`, `reply --ack`, and `wait --resolved` automation keeps working:
+
+```sh
+raft swarm candidates \
+  --capability review \
+  --capability tests \
+  --exclude codex \
+  --json
+
+raft swarm assign \
+  --from codex \
+  --channel homekeep-sync \
+  --capability review \
+  --count 1 \
+  --subject "Review estimator patch" \
+  --body "Please review the diff and reply with blockers." \
+  --json
+```
+
+Every candidate row includes `matching_capabilities`, `missing_capabilities`,
+`owes`, `waiting_on`, `score`, and human-readable `reasons`, making it suitable
+for higher-level collaboration algorithms that want deterministic, explainable
+worker selection. Use `swarm assign --dry-run --json` to preview a routing
+decision without mutating the bus.
 
 Every open ask reported by `awaiting`, `me`, and `wait --owed`/`--resolved`
 carries `awaited_live`: whether the awaited agent's heartbeat is still active.

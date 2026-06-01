@@ -72,21 +72,25 @@ impl Waker {
 mod tests {
     use super::*;
     use std::fs;
+    use std::path::PathBuf;
     use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-    fn temp_dir() -> std::path::PathBuf {
+    fn scratch_dir() -> PathBuf {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let path = std::env::temp_dir().join(format!("raft-waker-{}-{nanos}", std::process::id()));
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("run")
+            .join("test-buses")
+            .join(format!("raft-waker-{}-{nanos}", std::process::id()));
         fs::create_dir_all(&path).unwrap();
         path
     }
 
     #[test]
     fn wakes_before_timeout_on_filesystem_change() {
-        let dir = temp_dir();
+        let dir = scratch_dir();
         let waker = Waker::new(&[dir.as_path()]);
         if !waker.is_event_driven() {
             return; // platform without a working watcher: polling fallback, nothing to assert

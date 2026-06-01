@@ -14,6 +14,15 @@ network with cryptographic identity, capability tokens, and remote task
 delegation over an untrusted network. See
 `docs/superpowers/specs/2026-05-29-raft-mesh-remote-execution-design.md`.
 
+### Added
+
+- `raft swarm dispatch` selects the best live channel member by capability,
+  state, and current open-ask load, then enqueues a capability-gated executable
+  task for that worker. This bridges swarm routing with `raft run` automation.
+- The browser UI snapshot endpoint now emits weak ETags and returns
+  `304 Not Modified` for unchanged snapshots, letting the frontend skip JSON
+  parsing and DOM re-rendering on quiet polls.
+
 ### Added (raft mesh)
 
 - Cryptographic agent identity (L0). Each agent can mint an Ed25519 keypair and a
@@ -59,8 +68,28 @@ delegation over an untrusted network. See
   task stream at `conversations/<id>/streams/<task-id>.log`. The task result
   reply exposes `artifacts[]` and `log` in `task status --json`.
 
+### Changed
+
+- Added `raft swarm candidates` and `raft swarm assign` for automation-friendly
+  swarm orchestration. Candidate ranking explains capability matches, missing
+  tags, state, open-ask load, and score; assignment selects the best live channel
+  members and opens a normal `needs_response_from` ask so existing wait/ack flows
+  compose with higher-level collaboration algorithms.
+- The UI poller now uses conditional requests, skips rendering unchanged
+  snapshots, and backs off while offline instead of hammering the local server.
+- `sorted_read_dir` now caches file names before sorting, avoiding repeated
+  `PathBuf` allocation/comparison in hot bus-scanning paths.
+- Declared the Rust MSRV (`rust-version = "1.88"`), added a pinned
+  `rust-toolchain.toml` with `clippy` and `rustfmt`, and routed Makefile build,
+  check, test, lint, clean, and install targets through `rustup run 1.88.0 cargo`
+  so repository automation uses the intended compiler even if another Cargo is
+  earlier on `PATH`.
+
 ### Fixed
 
+- `swarm dispatch` now rejects requests without a capability filter, so an
+  executable task cannot accidentally route to any live channel member. Task
+  dispatch also rejects non-object `--args` JSON to match the tool-call contract.
 - `conversation open --if-missing` (with a derived id) is now idempotent. The
   derived id appended a random token, so every call minted a fresh id, the
   already-exists check never matched, and each "ensure the room exists" call

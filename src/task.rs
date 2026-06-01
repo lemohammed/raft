@@ -245,9 +245,9 @@ mod tests {
     }
 
     fn scratch_dir(tag: &str) -> std::path::PathBuf {
-        // Project-local scratch only (never the system temp dir).
         Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tmp")
+            .join("run")
+            .join("test-buses")
             .join(format!("raft-{tag}-{}", std::process::id()))
     }
 

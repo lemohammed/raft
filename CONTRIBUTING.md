@@ -23,8 +23,11 @@ so **correctness and a stable contract matter more than features**.
    SHA-256, hex. No format may depend on a Rust crate's internal representation.
 4. **Tests are the spec in executable form.** Every behavior change ships with a
    test in `tests/`. Bug fixes ship with a regression test that fails before the
-   fix. `cargo build --release` and `cargo test --release` must be green.
-5. **Security posture.** The mesh assumes an untrusted network: authenticity is
+   fix. `make check` and `make release` must be green.
+5. **Use the pinned Rust toolchain.** `rust-toolchain.toml` selects Rust 1.88.0
+   with `clippy` and `rustfmt`; `Cargo.toml` declares `rust-version = "1.88"`.
+   Do not raise the MSRV or remove the pin without a deliberate changelog note.
+6. **Security posture.** The mesh assumes an untrusted network: authenticity is
    per-record (signed), authority is explicit (capability tokens), and isolation
    is enforced (sandbox), not optional. If a change weakens any of these,
    document the threat model honestly.
@@ -33,8 +36,12 @@ so **correctness and a stable contract matter more than features**.
 
 - Read `docs/protocol.md` (local filesystem protocol) and, for mesh work,
   `docs/superpowers/specs/2026-05-29-raft-mesh-remote-execution-design.md`.
+- Let rustup install/select the pinned toolchain before local checks:
+  `make toolchain` installs Rust 1.88.0 plus `clippy`/`rustfmt`; the Makefile
+  runs `rustup run 1.88.0 cargo ...` so checks do not accidentally use a newer
+  Homebrew or system Cargo that appears earlier on `PATH`.
 - Branch from `main`. Keep changes focused — one concern per PR.
-- Run `cargo build --release && cargo test --release` before pushing.
+- Run `make check && make release` before pushing.
 - Update `README.md`, `CHANGELOG.md` (`[Unreleased]`), and `docs/` when behavior
   or the contract changes.
 - Commit messages: imperative subject, a body that explains *why*, and follow the

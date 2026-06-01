@@ -102,7 +102,26 @@ fn handle_ui_request(
                     .unwrap_or(default_limit)
                     .clamp(1, 500);
                 let snapshot = build_ui_snapshot(root, &agent, limit)?;
-                write_http_json(&mut stream, 200, &snapshot)
+                let etag = ui_snapshot_etag(&snapshot)?;
+                if http_header(&request, "if-none-match")
+                    .map(|value| http_etag_matches(value, &etag))
+                    .unwrap_or(false)
+                {
+                    write_http_response_with_headers(
+                        &mut stream,
+                        304,
+                        "application/json; charset=utf-8",
+                        b"",
+                        &[("ETag", etag.as_str())],
+                    )
+                } else {
+                    write_http_json_with_headers(
+                        &mut stream,
+                        200,
+                        &snapshot,
+                        &[("ETag", etag.as_str())],
+                    )
+                }
             }
             "/health" => write_http_text(&mut stream, 200, "ok"),
             "/favicon.ico" => {
@@ -526,6 +545,31 @@ fn ui_allowed_origins(hosts: &[String]) -> Vec<String> {
     hosts.iter().map(|host| format!("http://{host}")).collect()
 }
 
+fn ui_snapshot_etag(snapshot: &UiSnapshot) -> Result<String> {
+    let mut value = serde_json::to_value(snapshot)?;
+    if let serde_json::Value::Object(object) = &mut value {
+        object.remove("generated_at");
+    }
+    let bytes = serde_json::to_vec(&value)?;
+    Ok(format!("W/\"ui-{:016x}\"", fnv1a64(&bytes)))
+}
+
+fn fnv1a64(bytes: &[u8]) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    for byte in bytes {
+        hash ^= *byte as u64;
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
+}
+
+fn http_etag_matches(header: &str, etag: &str) -> bool {
+    header
+        .split(',')
+        .map(str::trim)
+        .any(|candidate| candidate == "*" || candidate == etag)
+}
+
 fn build_ui_snapshot(root: &Path, agent_id: &str, limit: usize) -> Result<UiSnapshot> {
     let mut agents = Vec::new();
     for entry in sorted_read_dir(&root.join("agents"))? {
@@ -713,8 +757,23 @@ fn write_http_text(stream: &mut TcpStream, status: u16, body: &str) -> Result<()
 }
 
 fn write_http_json<T: Serialize>(stream: &mut TcpStream, status: u16, payload: &T) -> Result<()> {
+    write_http_json_with_headers(stream, status, payload, &[])
+}
+
+fn write_http_json_with_headers<T: Serialize>(
+    stream: &mut TcpStream,
+    status: u16,
+    payload: &T,
+    extra_headers: &[(&str, &str)],
+) -> Result<()> {
     let body = serde_json::to_vec_pretty(payload)?;
-    write_http_response(stream, status, "application/json; charset=utf-8", &body)
+    write_http_response_with_headers(
+        stream,
+        status,
+        "application/json; charset=utf-8",
+        &body,
+        extra_headers,
+    )
 }
 
 fn write_http_response(
@@ -723,19 +782,37 @@ fn write_http_response(
     content_type: &str,
     body: &[u8],
 ) -> Result<()> {
+    write_http_response_with_headers(stream, status, content_type, body, &[])
+}
+
+fn write_http_response_with_headers(
+    stream: &mut TcpStream,
+    status: u16,
+    content_type: &str,
+    body: &[u8],
+    extra_headers: &[(&str, &str)],
+) -> Result<()> {
     let reason = match status {
         200 => "OK",
         204 => "No Content",
+        304 => "Not Modified",
         400 => "Bad Request",
         403 => "Forbidden",
         404 => "Not Found",
         405 => "Method Not Allowed",
         _ => "OK",
     };
-    let headers = format!(
-        "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
+    let mut headers = format!(
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\n",
         body.len()
     );
+    for (name, value) in extra_headers {
+        headers.push_str(name);
+        headers.push_str(": ");
+        headers.push_str(value);
+        headers.push_str("\r\n");
+    }
+    headers.push_str("Cache-Control: no-store\r\nConnection: close\r\n\r\n");
     stream.write_all(headers.as_bytes())?;
     stream.write_all(body)?;
     stream.flush()?;

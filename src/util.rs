@@ -233,16 +233,16 @@ pub(crate) fn slugify_id_segment(value: &str) -> String {
 
 pub(crate) fn normalize_send_kind(kind: &str) -> Result<String> {
     match kind {
-        "message" | "event" | "receipt" | "task" => Ok(kind.to_string()),
+        "message" | "event" | "receipt" | "task" | "summary" => Ok(kind.to_string()),
         "system" => bail!("kind \"system\" is reserved for raft internals"),
-        _ => bail!("unsupported kind {kind:?}; use message, event, receipt, or task"),
+        _ => bail!("unsupported kind {kind:?}; use message, event, receipt, task, or summary"),
     }
 }
 
 /// Kinds that may carry an obligation (`--needs-response-from`/`--requires-ack`)
 /// and therefore open an ask: a plain `message`, or a `task` (a delegated unit of
-/// work whose receipt lifecycle *is* its status). `event`/`receipt`/`system`
-/// never open an ask.
+/// work whose receipt lifecycle *is* its status). `event`/`receipt`/`summary`/
+/// `system` never open an ask.
 pub(crate) fn is_obligation_kind(kind: &str) -> bool {
     matches!(kind, "message" | "task")
 }

@@ -25,6 +25,12 @@ TYPICAL AGENT FLOW
                                        answer an ask and close it in one call
   raft awaiting <me>                   see what you owe and are owed
   raft roster --capability <tag>       find a live peer with a given skill
+  raft swarm candidates --capability <tag> --json
+                                       rank workers by skill, state, and load
+  raft swarm assign --from <me> --channel <room> --capability <tag> ...
+                                       pick workers and open an actionable ask
+  raft swarm dispatch --from <me> --channel <room> --capability <tag> --tool <tool>
+                                       pick one worker and enqueue an executable task
   raft channel list --agent <me>       discover channels you can join
 
 EXIT CODES
@@ -137,6 +143,11 @@ pub(crate) enum Commands {
         #[command(subcommand)]
         command: TaskCommand,
     },
+    /// Rank and assign agents for swarm-style collaboration.
+    Swarm {
+        #[command(subcommand)]
+        command: SwarmCommand,
+    },
     /// Run the executor loop: claim authorized task asks and run their tools sandboxed.
     Run(RunArgs),
 }
@@ -204,6 +215,103 @@ pub(crate) struct TaskCancelArgs {
     /// Optional reason recorded on the cancellation notice.
     #[arg(long)]
     pub(crate) reason: Option<String>,
+    /// Emit machine-readable JSON instead of text.
+    #[arg(long)]
+    pub(crate) json: bool,
+}
+
+#[derive(Subcommand)]
+pub(crate) enum SwarmCommand {
+    /// Rank live agents by capability match, availability, and current open-ask load.
+    Candidates(SwarmCandidatesArgs),
+    /// Pick the best matching agents in a channel and send them an actionable ask.
+    Assign(SwarmAssignArgs),
+    /// Pick the best matching agent in a channel and dispatch an executable task.
+    Dispatch(SwarmDispatchArgs),
+}
+
+#[derive(Args)]
+pub(crate) struct SwarmCandidatesArgs {
+    /// Required capability tag. Repeat, or pass comma-separated tags.
+    #[arg(long = "capability")]
+    pub(crate) capabilities: Vec<String>,
+    /// Exclude an agent id from consideration. Repeat, or pass comma-separated ids.
+    #[arg(long = "exclude")]
+    pub(crate) exclude: Vec<String>,
+    /// Include partial matches instead of requiring every requested capability.
+    #[arg(long = "allow-partial")]
+    pub(crate) allow_partial: bool,
+    /// Include stale agents with a large score penalty.
+    #[arg(long)]
+    pub(crate) all: bool,
+    /// Maximum number of candidates to return.
+    #[arg(long, default_value_t = 10)]
+    pub(crate) limit: usize,
+    /// Emit machine-readable JSON instead of text.
+    #[arg(long)]
+    pub(crate) json: bool,
+}
+
+#[derive(Args)]
+pub(crate) struct SwarmAssignArgs {
+    /// Coordinator/asker agent id.
+    #[arg(long = "from")]
+    pub(crate) sender: String,
+    /// Existing channel where the ask should be sent.
+    #[arg(long)]
+    pub(crate) channel: String,
+    /// Required capability tag. Repeat, or pass comma-separated tags.
+    #[arg(long = "capability")]
+    pub(crate) capabilities: Vec<String>,
+    /// Exclude an agent id from consideration. Repeat, or pass comma-separated ids.
+    #[arg(long = "exclude")]
+    pub(crate) exclude: Vec<String>,
+    /// Number of agents to select.
+    #[arg(long, default_value_t = 1)]
+    pub(crate) count: usize,
+    /// Subject line for the assignment ask.
+    #[arg(long)]
+    pub(crate) subject: String,
+    /// Body for the assignment ask.
+    #[arg(long)]
+    pub(crate) body: String,
+    /// Preview the selected agents without sending a message.
+    #[arg(long = "dry-run")]
+    pub(crate) dry_run: bool,
+    /// Emit machine-readable JSON instead of text.
+    #[arg(long)]
+    pub(crate) json: bool,
+}
+
+#[derive(Args)]
+pub(crate) struct SwarmDispatchArgs {
+    /// Coordinator/dispatcher agent id.
+    #[arg(long = "from")]
+    pub(crate) sender: String,
+    /// Existing channel whose live members should be considered as workers.
+    #[arg(long)]
+    pub(crate) channel: String,
+    /// Required worker capability tag. Repeat, or pass comma-separated tags.
+    #[arg(long = "capability")]
+    pub(crate) capabilities: Vec<String>,
+    /// Exclude an agent id from consideration. Repeat, or pass comma-separated ids.
+    #[arg(long = "exclude")]
+    pub(crate) exclude: Vec<String>,
+    /// Tool name to invoke on the selected worker.
+    #[arg(long)]
+    pub(crate) tool: String,
+    /// Tool arguments as a JSON object (default `{}`).
+    #[arg(long, default_value = "{}")]
+    pub(crate) args: String,
+    /// Capability token file authorizing the selected worker to run this tool.
+    #[arg(long)]
+    pub(crate) cap: Option<PathBuf>,
+    /// Maximum runtime, seconds (also bounded by any capability limit).
+    #[arg(long = "max-runtime-s")]
+    pub(crate) max_runtime_s: Option<u64>,
+    /// Maximum captured output, bytes.
+    #[arg(long = "max-output-bytes")]
+    pub(crate) max_output_bytes: Option<u64>,
     /// Emit machine-readable JSON instead of text.
     #[arg(long)]
     pub(crate) json: bool,
@@ -689,7 +797,7 @@ pub(crate) struct SendArgs {
     /// Message body.
     #[arg(long)]
     pub(crate) body: String,
-    /// Message kind. One of: message, event, receipt (`system` is reserved for raft).
+    /// Message kind. One of: message, event, receipt, task, summary (`system` is reserved for raft).
     #[arg(long, default_value = "message")]
     pub(crate) kind: String,
     /// Id of the message this one replies to (threads the reply).
@@ -725,6 +833,9 @@ pub(crate) struct ReplyArgs {
     /// Subject line; defaults to the parent message's subject.
     #[arg(long)]
     pub(crate) subject: Option<String>,
+    /// Message kind for this reply. Use `summary` to publish the next rolling conversation memory.
+    #[arg(long, default_value = "message")]
+    pub(crate) kind: String,
     /// Require recipients to record an acknowledgement receipt.
     #[arg(long = "requires-ack")]
     pub(crate) requires_ack: bool,
