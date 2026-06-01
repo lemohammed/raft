@@ -659,6 +659,7 @@ fn doctor_check_message(
         );
     }
     if message.kind == "task" {
+        let mut worker_pubkey = None;
         if message.needs_response_from.len() != 1 {
             report.error(
                 root,
@@ -681,7 +682,7 @@ fn doctor_check_message(
         }
         if let Some(worker) = message.needs_response_from.first() {
             match crate::identity::load_passport(root, worker) {
-                Ok(Some(_)) => {}
+                Ok(Some(passport)) => worker_pubkey = Some(passport.pubkey),
                 Ok(None) => report.error(
                     root,
                     path,
@@ -698,15 +699,26 @@ fn doctor_check_message(
         }
         match crate::task::TaskBody::parse(&message.body) {
             Ok(body) => {
-                if let Some(token) = &body.capability
-                    && let Err(err) = crate::capability::verify_chain(token, None)
-                {
-                    report.error(
-                        root,
-                        path,
-                        "invalid_task_capability",
-                        format!("task capability chain is invalid: {}", err.message),
-                    );
+                if let Some(token) = &body.capability {
+                    if let Err(err) = crate::capability::verify_chain(token, None) {
+                        report.error(
+                            root,
+                            path,
+                            "invalid_task_capability",
+                            format!("task capability chain is invalid: {}", err.message),
+                        );
+                    }
+                    if let Some(worker_pubkey) = worker_pubkey.as_deref()
+                        && token.blocks.last().map(|block| block.holder.as_str())
+                            != Some(worker_pubkey)
+                    {
+                        report.error(
+                            root,
+                            path,
+                            "task_capability_holder_mismatch",
+                            "task capability holder does not match the awaited worker",
+                        );
+                    }
                 }
             }
             Err(err) => report.error(
