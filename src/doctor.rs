@@ -659,6 +659,17 @@ fn doctor_check_message(
         );
     }
     if message.kind == "task" {
+        if message.needs_response_from.len() != 1 {
+            report.error(
+                root,
+                path,
+                "invalid_task_worker_count",
+                format!(
+                    "task messages must name exactly one awaited worker, found {}",
+                    message.needs_response_from.len()
+                ),
+            );
+        }
         match crate::task::TaskBody::parse(&message.body) {
             Ok(body) => {
                 if let Some(token) = &body.capability
