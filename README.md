@@ -542,6 +542,9 @@ When `--cap` is supplied, `task dispatch` fails before writing the task unless
 the token's current holder matches the selected worker's claimed public key.
 That keeps a coordinator from accidentally assigning a valid token to the wrong
 agent and leaving the executor to reject it later.
+Dispatch also checks the token's effective scope against the requested
+conversation, tool, expiry, runtime limit, and output limit so an impossible
+assignment never enters the worker's queue.
 The `task` message kind is reserved for this dispatch path; `send`, `reply`,
 and the UI endpoint reject manual `kind=task` writes so they cannot bypass the
 Hermes body and worker/capability checks.
