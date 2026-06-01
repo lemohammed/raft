@@ -3359,6 +3359,71 @@ fn swarm_assign_selects_best_candidate_and_opens_an_ask() {
 }
 
 #[test]
+fn swarm_assign_requires_at_least_one_capability() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(
+        &bus,
+        &[
+            "claim",
+            "coord",
+            "--workspace",
+            ".",
+            "--capabilities",
+            "coordination",
+        ],
+    );
+    run(
+        &bus,
+        &[
+            "claim",
+            "worker",
+            "--workspace",
+            ".",
+            "--capabilities",
+            "review",
+        ],
+    );
+    run(
+        &bus,
+        &[
+            "channel",
+            "create",
+            "squad",
+            "--creator",
+            "coord",
+            "--members",
+            "worker",
+        ],
+    );
+
+    let denied = run_fail(
+        &bus,
+        &[
+            "swarm",
+            "assign",
+            "--from",
+            "coord",
+            "--channel",
+            "squad",
+            "--subject",
+            "Ambiguous assignment",
+            "--body",
+            "This should name the capability needed.",
+            "--json",
+        ],
+    );
+    let err: serde_json::Value = serde_json::from_slice(&denied.stderr).unwrap();
+    assert_eq!(err["error"]["code"], "parse");
+    assert!(
+        err["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("capability")
+    );
+}
+
+#[test]
 fn swarm_dispatch_requires_at_least_one_capability() {
     let bus = temp_bus();
     run(&bus, &["init"]);

@@ -3151,6 +3151,9 @@ fn cmd_swarm_assign(root: &Path, args: SwarmAssignArgs) -> Result<()> {
         bail!("--count must be at least 1");
     }
     let required = parse_repeated_csv(&args.capabilities, "capability")?;
+    if required.is_empty() {
+        bail_code!("parse", "swarm assign requires at least one --capability");
+    }
     let mut excluded = parse_repeated_csv(&args.exclude, "agent id")?;
     excluded.push(sender.clone());
     let excluded: BTreeSet<String> = unique(excluded).into_iter().collect();
