@@ -299,11 +299,11 @@ pub(crate) fn hostname() -> String {
 }
 
 pub(crate) fn iso_now() -> String {
-    Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true)
+    Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
 pub(crate) fn iso_after(seconds: u64) -> String {
-    (Utc::now() + TimeDelta::seconds(seconds as i64)).to_rfc3339_opts(SecondsFormat::Secs, true)
+    (Utc::now() + TimeDelta::seconds(seconds as i64)).to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
 pub(crate) fn parse_time(value: &str) -> std::result::Result<DateTime<Utc>, chrono::ParseError> {
