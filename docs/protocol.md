@@ -350,11 +350,15 @@ It scans the existing bus and reports:
 - forged `system` messages, messages with recipients outside the conversation,
   dangling `after` pointers, orphaned receipt directories, and invalid signed
   message/receipt hashes or signatures;
+- malformed message routing fields: invalid sender, conversation, recipient,
+  mention, awaited-agent, `after`, or `subject_id` values, plus duplicate
+  recipients, mentions, or awaited agents;
 - impossible asks: non-obligation message kinds carrying ack/reply obligations,
   duplicate or out-of-room awaited agents, and task messages missing one
   explicit worker recipient;
 - malformed task bodies, invalid task capability chains, task capabilities held
-  by the wrong worker, and task workers whose local passport is missing;
+  by the wrong worker, task result replies from the wrong agent, invalid task
+  result bodies, and task workers whose local passport is missing;
 - stale locks and runtime watcher state whose pid no longer appears live.
 
 Warnings exit successfully by default so existing buses with unclaimed historical
