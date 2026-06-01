@@ -467,6 +467,16 @@ fn cmd_task_dispatch(root: &Path, args: TaskDispatchArgs) -> Result<()> {
                 "capability holder does not match selected worker"
             );
         }
+        let request = capability::AuthRequest {
+            action: "tool.run",
+            conversation: Some(&conversation_id),
+            tool: Some(&body.tool_call.name),
+            env: None,
+            now: Utc::now(),
+            requested_runtime_s: body.limits.max_runtime_s,
+            requested_output_bytes: body.limits.max_output_bytes,
+        };
+        capability::authorize(token, None, &request)?;
     }
     let message = send_task_message(
         root,
