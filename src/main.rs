@@ -389,8 +389,8 @@ fn build_task_body(
     if !arguments.is_object() {
         bail_code!("parse", "--args must be a JSON object");
     }
-    // If a capability is attached, fail fast on a malformed/forged token; the
-    // worker's executor performs the full contextual authorization.
+    // If a capability is attached, fail fast on a malformed/forged token before
+    // the dispatch and executor paths perform contextual authorization.
     let capability = match cap {
         Some(path) => {
             let token: capability::Token = read_json(path)?.ok_or_else(|| {
