@@ -1006,7 +1006,9 @@ fn doctor_check_receipt(
         );
     }
     for event in &receipt.history {
-        if let Err(err) = validate_ack_status(&event.status) {
+        if event.status != "read"
+            && let Err(err) = validate_ack_status(&event.status)
+        {
             report.error(
                 root,
                 path,
