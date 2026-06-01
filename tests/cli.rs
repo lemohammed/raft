@@ -2171,6 +2171,36 @@ fn conversation_open_if_missing_is_idempotent_for_a_derived_id() {
 }
 
 #[test]
+fn conversation_open_rejects_missing_peer_with_parse_code() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(&bus, &["claim", "alice", "--workspace", "."]);
+
+    let denied = run_fail(
+        &bus,
+        &[
+            "conversation",
+            "open",
+            "--from",
+            "alice",
+            "--to",
+            "alice",
+            "--topic",
+            "solo",
+            "--json",
+        ],
+    );
+    let err: serde_json::Value = serde_json::from_slice(&denied.stderr).unwrap();
+    assert_eq!(err["error"]["code"], "parse");
+    assert!(
+        err["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("private chat")
+    );
+}
+
+#[test]
 fn event_kind_cannot_open_an_ask() {
     let bus = temp_bus();
     run(&bus, &["init"]);

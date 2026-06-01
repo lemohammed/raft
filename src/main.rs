@@ -1902,7 +1902,10 @@ fn cmd_conversation_open(root: &Path, args: ConversationOpenArgs) -> Result<()> 
     participants.extend(split_csv(&args.to)?);
     let participants = unique(participants);
     if participants.len() < 2 {
-        bail!("a private chat needs at least two unique participants");
+        bail_code!(
+            "parse",
+            "a private chat needs at least two unique participants"
+        );
     }
     let conversation_id = match args.conversation {
         Some(id) => validate_id(&id, "conversation id")?,
