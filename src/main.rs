@@ -3151,7 +3151,7 @@ fn cmd_swarm_assign(root: &Path, args: SwarmAssignArgs) -> Result<()> {
     let sender = validate_id(&args.sender, "sender")?;
     let channel_id = validate_id(&args.channel, "channel id")?;
     if args.count == 0 {
-        bail!("--count must be at least 1");
+        bail_code!("parse", "swarm assign --count must be at least 1");
     }
     let required = parse_repeated_csv(&args.capabilities, "capability")?;
     if required.is_empty() {
