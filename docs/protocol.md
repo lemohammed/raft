@@ -51,7 +51,7 @@ run/bus/
     conversation-homekeep-sync.lock/
       owner.json
   archive/
-  tmp/
+  staging/
 ```
 
 The bus root is mode `0700`; JSON files are mode `0600`.

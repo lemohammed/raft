@@ -171,7 +171,7 @@ pub(crate) fn ensure_root(root: &Path) -> Result<()> {
         "heartbeat",
         "journal",
         "locks",
-        "tmp",
+        "staging",
         "watch",
     ] {
         let path = root.join(child);

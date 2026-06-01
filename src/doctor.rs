@@ -152,7 +152,7 @@ fn build_doctor_report(root: &Path, strict: bool) -> DoctorReport {
         "heartbeat",
         "journal",
         "locks",
-        "tmp",
+        "staging",
         "watch",
     ] {
         doctor_check_expected_dir(root, &mut report, child);

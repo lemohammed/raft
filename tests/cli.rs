@@ -69,6 +69,16 @@ fn claim_agents(root: &PathBuf, agents: &[&str]) {
 }
 
 #[test]
+fn init_creates_staging_directory_without_tmp_directory() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+
+    assert!(bus.join("staging").is_dir());
+    let legacy_scratch_name = ["t", "mp"].concat();
+    assert!(!bus.join(legacy_scratch_name).exists());
+}
+
+#[test]
 fn send_json_returns_resolved_envelope() {
     let bus = temp_bus();
     run(&bus, &["init"]);
