@@ -2458,6 +2458,7 @@ pub(crate) fn send_message_locked(root: &Path, input: SendMessageInput) -> Resul
         }
     }
     recipients = unique(recipients);
+    ensure_claimed_recipients(root, &meta, &recipients)?;
     let kind = normalize_send_kind(&input.kind)?;
     if kind == "summary" && input.body.len() > MAX_SUMMARY_BYTES {
         return Err(RaftError::coded(
@@ -4541,6 +4542,21 @@ fn load_claimed_agent(root: &Path, agent_id: &str) -> Result<Agent> {
 fn ensure_claimed_agents(root: &Path, agent_ids: &[String]) -> Result<()> {
     for agent_id in agent_ids {
         load_claimed_agent(root, agent_id)?;
+    }
+    Ok(())
+}
+
+fn ensure_claimed_recipients(root: &Path, meta: &Meta, recipients: &[String]) -> Result<()> {
+    let mut resolved = BTreeSet::new();
+    for recipient in recipients {
+        if recipient == "*" {
+            resolved.extend(meta.participants.iter().cloned());
+        } else {
+            resolved.insert(recipient.clone());
+        }
+    }
+    for agent_id in resolved {
+        load_claimed_agent(root, &agent_id)?;
     }
     Ok(())
 }

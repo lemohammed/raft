@@ -4640,6 +4640,45 @@ fn conversation_create_rejects_unclaimed_participant() {
 }
 
 #[test]
+fn send_rejects_unclaimed_direct_recipient() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    claim_agents(&bus, &["alice", "ghost"]);
+    run(
+        &bus,
+        &[
+            "conversation",
+            "create",
+            "legacy",
+            "--participants",
+            "alice,ghost",
+            "--starter",
+            "alice",
+        ],
+    );
+    fs::remove_file(bus.join("agents/ghost.json")).unwrap();
+
+    let denied = run_fail(
+        &bus,
+        &[
+            "send",
+            "--conversation",
+            "legacy",
+            "--from",
+            "alice",
+            "--to",
+            "ghost",
+            "--body",
+            "do not strand this",
+            "--json",
+        ],
+    );
+    let err: serde_json::Value = serde_json::from_slice(&denied.stderr).unwrap();
+    assert_eq!(err["error"]["code"], "not_claimed");
+    assert!(err["error"]["message"].as_str().unwrap().contains("@ghost"));
+}
+
+#[test]
 fn conversation_remove_drops_a_participant_and_blocks_their_sends() {
     let bus = temp_bus();
     run(&bus, &["init"]);
