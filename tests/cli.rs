@@ -2974,10 +2974,14 @@ fn gc_reaps_stale_orphan_temp_files_but_keeps_fresh_ones() {
     let bus = temp_bus();
     run(&bus, &["init"]);
 
-    // Two interrupted atomic writes: dot-prefixed ".tmp" siblings.
-    let stale = bus.join("agents").join(".atlas.json.999.deadbeef.tmp");
+    // Two interrupted atomic writes: dot-prefixed staged siblings.
+    let stale = bus
+        .join("agents")
+        .join(".atlas.json.999.deadbeef.raft-staged");
     fs::write(&stale, b"{}\n").unwrap();
-    let fresh = bus.join("agents").join(".atlas.json.998.cafef00d.tmp");
+    let fresh = bus
+        .join("agents")
+        .join(".atlas.json.998.cafef00d.raft-staged");
     fs::write(&fresh, b"{}\n").unwrap();
     backdate(&stale);
 

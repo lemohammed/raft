@@ -190,8 +190,8 @@ pub(crate) fn atomic_write_json<T: Serialize>(path: &Path, payload: &T) -> Resul
         .file_name()
         .and_then(OsStr::to_str)
         .ok_or_else(|| RaftError::new(format!("invalid target file: {}", path.display())))?;
-    let tmp = path.with_file_name(format!(
-        ".{file_name}.{}.{}.tmp",
+    let staged = path.with_file_name(format!(
+        ".{file_name}.{}.{}.raft-staged",
         process::id(),
         unique_token()
     ));
@@ -199,11 +199,11 @@ pub(crate) fn atomic_write_json<T: Serialize>(path: &Path, payload: &T) -> Resul
         .write(true)
         .create_new(true)
         .mode(0o600)
-        .open(&tmp)?;
+        .open(&staged)?;
     serde_json::to_writer_pretty(&mut file, payload)?;
     file.write_all(b"\n")?;
     file.sync_all()?;
-    fs::rename(&tmp, path)?;
+    fs::rename(&staged, path)?;
     fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
     if let Some(parent) = path.parent() {
         let _ = fsync_dir(parent);
@@ -302,14 +302,14 @@ pub(crate) fn set_dir_private(path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// `atomic_write_json` writes a dot-prefixed sibling ending in ".tmp" and
-/// renames it into place. A crash between create and rename orphans one. They
-/// are only ever transient, so anything older than this is safe to reap.
+/// `atomic_write_json` writes a dot-prefixed sibling ending in ".raft-staged"
+/// and renames it into place. A crash between create and rename orphans one.
+/// They are only ever transient, so anything older than this is safe to reap.
 pub(crate) const ORPHAN_TMP_STALE_SECONDS: u64 = 300;
 
 /// True for the transient sibling files written by [`atomic_write_json`].
 pub(crate) fn is_temp_artifact(name: &str) -> bool {
-    name.starts_with('.') && name.ends_with(".tmp")
+    name.starts_with('.') && (name.ends_with(".raft-staged") || name.ends_with(".tmp"))
 }
 
 fn temp_file_is_stale(path: &Path) -> bool {

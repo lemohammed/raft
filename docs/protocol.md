@@ -121,12 +121,12 @@ cleanup.
 
 To update `target.json`:
 
-1. Write `.target.json.<pid>.<uuid>.tmp` in the same directory.
+1. Write `.target.json.<pid>.<uuid>.raft-staged` in the same directory.
 2. Flush and fsync the file.
 3. Atomically rename the temp file over `target.json`.
 4. Fsync the parent directory where supported.
 
-Readers ignore dot-prefixed temp files.
+Readers ignore dot-prefixed staged write files.
 
 ## Agents
 
