@@ -29,5 +29,8 @@ jobs:
       - name: Check
         run: make check
 
+      - name: Documentation
+        run: make doc
+
       - name: Release build
         run: make release
