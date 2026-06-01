@@ -1800,7 +1800,7 @@ fn cmd_conversation_create(root: &Path, args: ConversationCreateArgs) -> Result<
         None => participants[0].clone(),
     };
     if !participants.contains(&starter) {
-        bail!("starter must be one of the participants");
+        bail_code!("parse", "starter must be one of the participants");
     }
 
     ensure_root(root)?;

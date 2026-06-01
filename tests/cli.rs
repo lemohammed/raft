@@ -4669,6 +4669,35 @@ fn conversation_create_rejects_too_few_participants_with_parse_code() {
 }
 
 #[test]
+fn conversation_create_rejects_outside_starter_with_parse_code() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    claim_agents(&bus, &["alice", "bob", "carol"]);
+
+    let denied = run_fail(
+        &bus,
+        &[
+            "conversation",
+            "create",
+            "proj",
+            "--participants",
+            "alice,bob",
+            "--starter",
+            "carol",
+            "--json",
+        ],
+    );
+    let err: serde_json::Value = serde_json::from_slice(&denied.stderr).unwrap();
+    assert_eq!(err["error"]["code"], "parse");
+    assert!(
+        err["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("starter")
+    );
+}
+
+#[test]
 fn send_rejects_unclaimed_direct_recipient() {
     let bus = temp_bus();
     run(&bus, &["init"]);
