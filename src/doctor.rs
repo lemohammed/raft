@@ -553,6 +553,14 @@ fn doctor_check_message(
     if let Err(err) = validate_id(&message.from, "sender") {
         report.error(root, path, "invalid_sender_id", err.to_string());
     }
+    if let Err(err) = validate_id(&message.conversation_id, "conversation id") {
+        report.error(
+            root,
+            path,
+            "invalid_message_conversation_id",
+            err.to_string(),
+        );
+    }
     if message.conversation_id != meta.id {
         report.error(
             root,
