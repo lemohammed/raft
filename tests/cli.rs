@@ -2592,6 +2592,7 @@ fn roster_lists_live_agents_with_presence_and_ask_counts() {
 fn subject_id_rejects_rate_key_separator() {
     let bus = temp_bus();
     run(&bus, &["init"]);
+    claim_agents(&bus, &["a", "b", "tg-bridge"]);
     run(
         &bus,
         &[
@@ -2629,6 +2630,7 @@ fn subject_id_rejects_rate_key_separator() {
 fn system_kind_is_reserved_for_raft() {
     let bus = temp_bus();
     run(&bus, &["init"]);
+    claim_agents(&bus, &["a", "b"]);
     run(
         &bus,
         &[
@@ -2664,7 +2666,7 @@ fn system_kind_is_reserved_for_raft() {
 fn records_include_schema_versions_and_journal_entries() {
     let bus = temp_bus();
     run(&bus, &["init"]);
-    run(&bus, &["claim", "agent-a", "--workspace", "."]);
+    claim_agents(&bus, &["agent-a", "b"]);
     run(
         &bus,
         &[
@@ -2934,6 +2936,7 @@ fn doctor_reports_corrupt_json_without_mutating() {
 fn doctor_strict_fails_on_warnings() {
     let bus = temp_bus();
     run(&bus, &["init"]);
+    claim_agents(&bus, &["agent-a", "agent-b"]);
     run(
         &bus,
         &[
@@ -2946,6 +2949,11 @@ fn doctor_strict_fails_on_warnings() {
             "agent-a",
         ],
     );
+    let stale = bus
+        .join("agents")
+        .join(".strict-warning.json.1.abc.raft-staged");
+    fs::write(&stale, b"{}\n").unwrap();
+    backdate(&stale);
 
     let normal = run(&bus, &["doctor", "--json"]);
     let normal_report: serde_json::Value = serde_json::from_slice(&normal.stdout).unwrap();
@@ -7747,6 +7755,7 @@ fn task_dispatch_rejects_unclaimed_worker() {
     let bus = temp_bus();
     run(&bus, &["init"]);
     run(&bus, &["claim", "coord", "--workspace", "."]);
+    run(&bus, &["claim", "ghost", "--workspace", "."]);
     run(
         &bus,
         &[
@@ -7759,6 +7768,7 @@ fn task_dispatch_rejects_unclaimed_worker() {
             "ghost",
         ],
     );
+    fs::remove_file(bus.join("agents/ghost.json")).unwrap();
 
     let denied = run_fail(
         &bus,
