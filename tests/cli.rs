@@ -8692,9 +8692,9 @@ fn executor_requires_local_passport_before_running_tasks() {
         ],
     );
 
-    // Alice issues a token to herself, then sends it on a task assigned to
-    // worker. If worker's local passport is missing, the executor must refuse
-    // to process anything as worker instead of running with a weakened identity.
+    // Alice issues a token to worker. If worker's local passport is missing,
+    // the executor must refuse to process anything as worker instead of running
+    // with a weakened identity.
     let cap = bus.join("cap.json");
     run(
         &bus,
@@ -8704,7 +8704,7 @@ fn executor_requires_local_passport_before_running_tasks() {
             "--issuer",
             "alice",
             "--to",
-            "alice",
+            "worker",
             "--action",
             "tool.run",
             "--tool",
