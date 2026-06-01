@@ -438,6 +438,7 @@ fn send_task_message(
             subject_id: None,
             requires_ack: false,
             needs_response_from: worker,
+            allow_task_kind: true,
         },
     )
 }
@@ -937,6 +938,7 @@ fn record_task_outcome(
             subject_id: None,
             requires_ack: false,
             needs_response_from: String::new(),
+            allow_task_kind: false,
         },
     )?;
     let note = error.or_else(|| Some("ok".to_string()));
@@ -2139,6 +2141,7 @@ fn cmd_send(root: &Path, args: SendArgs) -> Result<()> {
             subject_id: args.subject_id,
             requires_ack: args.requires_ack,
             needs_response_from: args.needs_response_from,
+            allow_task_kind: false,
         },
     )?;
     let offline = offline_recipients(root, &message)?;
@@ -2200,6 +2203,7 @@ fn cmd_reply(root: &Path, args: ReplyArgs) -> Result<()> {
             subject_id: None,
             requires_ack: args.requires_ack,
             needs_response_from: args.needs_response_from,
+            allow_task_kind: false,
         },
     )?;
     // Report the effective stored status: the downgrade guard may preserve a
@@ -2485,6 +2489,12 @@ pub(crate) fn send_message_locked(root: &Path, input: SendMessageInput) -> Resul
             "size": input.body.len(),
             "limit": MAX_SUMMARY_BYTES,
         })));
+    }
+    if kind == "task" && !input.allow_task_kind {
+        bail_code!(
+            "parse",
+            "kind \"task\" is reserved; use `raft task dispatch` to create tasks"
+        );
     }
     // Obligation flags belong only to obligation-bearing kinds (`message`,
     // `task`). An `event` (e.g. an IM bridge relaying a human) is not asking a
@@ -3242,6 +3252,7 @@ fn cmd_swarm_assign(root: &Path, args: SwarmAssignArgs) -> Result<()> {
             subject_id: None,
             requires_ack: false,
             needs_response_from: selected_csv,
+            allow_task_kind: false,
         },
     )?;
     let offline = offline_recipients(root, &message)?;

@@ -342,6 +342,7 @@ pub(crate) struct SendMessageInput {
     pub(crate) subject_id: Option<String>,
     pub(crate) requires_ack: bool,
     pub(crate) needs_response_from: String,
+    pub(crate) allow_task_kind: bool,
 }
 
 pub(crate) struct HttpRequest {

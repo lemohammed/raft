@@ -234,6 +234,7 @@ fn api_send(root: &Path, body: &[u8]) -> Result<serde_json::Value> {
             subject_id: request.subject_id,
             requires_ack: request.requires_ack,
             needs_response_from: request.needs_response_from.join(","),
+            allow_task_kind: false,
         },
     )?
     .id;
