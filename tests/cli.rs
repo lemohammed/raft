@@ -2617,7 +2617,7 @@ fn ack_rejects_unknown_status_and_nonterminal_keeps_ask_open() {
     );
     let envelope: serde_json::Value = serde_json::from_slice(&denied.stderr).unwrap();
     assert_eq!(envelope["ok"], serde_json::json!(false));
-    assert_eq!(envelope["error"]["code"], serde_json::json!("error"));
+    assert_eq!(envelope["error"]["code"], serde_json::json!("parse"));
     assert!(
         String::from_utf8_lossy(&denied.stderr).contains("finished"),
         "error should echo the rejected status"

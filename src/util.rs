@@ -53,10 +53,13 @@ pub(crate) fn validate_ack_status(value: &str) -> Result<String> {
     if ACK_STATUSES.contains(&value) {
         Ok(value.to_string())
     } else {
-        bail!(
-            "invalid status {value:?}; use one of: {}",
-            ACK_STATUSES.join(", ")
-        );
+        Err(RaftError::coded(
+            "parse",
+            format!(
+                "invalid status {value:?}; use one of: {}",
+                ACK_STATUSES.join(", ")
+            ),
+        ))
     }
 }
 
