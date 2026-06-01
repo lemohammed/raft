@@ -8,6 +8,7 @@ target/
 run/bus/
 run/test-buses/
 run/*.pid
+text_*.json
 dist/
 build/
 *.egg-info/
