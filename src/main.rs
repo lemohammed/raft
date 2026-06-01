@@ -1790,7 +1790,7 @@ fn cmd_conversation_create(root: &Path, args: ConversationCreateArgs) -> Result<
     let conversation_id = validate_id(&args.conversation, "conversation id")?;
     let participants = unique(split_csv(&args.participants)?);
     if participants.len() < 2 {
-        bail!("a conversation needs at least two participants");
+        bail_code!("parse", "a conversation needs at least two participants");
     }
     for participant in &participants {
         validate_id(participant, "participant")?;

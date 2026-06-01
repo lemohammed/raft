@@ -4640,6 +4640,35 @@ fn conversation_create_rejects_unclaimed_participant() {
 }
 
 #[test]
+fn conversation_create_rejects_too_few_participants_with_parse_code() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(&bus, &["claim", "alice", "--workspace", "."]);
+
+    let denied = run_fail(
+        &bus,
+        &[
+            "conversation",
+            "create",
+            "solo",
+            "--participants",
+            "alice",
+            "--starter",
+            "alice",
+            "--json",
+        ],
+    );
+    let err: serde_json::Value = serde_json::from_slice(&denied.stderr).unwrap();
+    assert_eq!(err["error"]["code"], "parse");
+    assert!(
+        err["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("two participants")
+    );
+}
+
+#[test]
 fn send_rejects_unclaimed_direct_recipient() {
     let bus = temp_bus();
     run(&bus, &["init"]);
