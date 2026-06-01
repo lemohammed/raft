@@ -913,6 +913,9 @@ fn doctor_check_receipt(
     receipt: &Receipt,
 ) {
     doctor_check_schema(root, path, report, receipt.v, "receipt");
+    if let Err(err) = validate_id(&receipt.message_id, "receipt message id") {
+        report.error(root, path, "invalid_receipt_message_id", err.to_string());
+    }
     if receipt.message_id != message_id {
         report.error(
             root,
