@@ -648,15 +648,27 @@ fn doctor_check_message(
             ),
         );
     }
-    if message.kind == "task"
-        && let Err(err) = crate::task::TaskBody::parse(&message.body)
-    {
-        report.error(
-            root,
-            path,
-            "invalid_task_body",
-            format!("task body is not valid Hermes JSON: {}", err.message),
-        );
+    if message.kind == "task" {
+        match crate::task::TaskBody::parse(&message.body) {
+            Ok(body) => {
+                if let Some(token) = &body.capability
+                    && let Err(err) = crate::capability::verify_chain(token, None)
+                {
+                    report.error(
+                        root,
+                        path,
+                        "invalid_task_capability",
+                        format!("task capability chain is invalid: {}", err.message),
+                    );
+                }
+            }
+            Err(err) => report.error(
+                root,
+                path,
+                "invalid_task_body",
+                format!("task body is not valid Hermes JSON: {}", err.message),
+            ),
+        }
     }
     if message.kind != "system" {
         doctor_check_signed_record(
