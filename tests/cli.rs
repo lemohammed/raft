@@ -6758,7 +6758,7 @@ fn search_filters_by_from_kind_and_mentions() {
     // No criteria at all is rejected.
     let no_criteria = run_fail(&bus, &["search", "--agent", "alice", "--json"]);
     let err: serde_json::Value = serde_json::from_slice(&no_criteria.stderr).unwrap();
-    assert_eq!(err["error"]["code"], "error");
+    assert_eq!(err["error"]["code"], "parse");
     assert!(
         err["error"]["message"]
             .as_str()
