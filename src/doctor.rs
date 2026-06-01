@@ -615,6 +615,9 @@ fn doctor_check_message(
         }
     }
     for mention in &message.mentions {
+        if let Err(err) = validate_id(mention, "mention") {
+            report.error(root, path, "invalid_mention_id", err.to_string());
+        }
         if !meta.participants.iter().any(|item| item == mention) {
             report.warn(
                 root,
