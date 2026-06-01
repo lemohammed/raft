@@ -3,7 +3,7 @@ BINDIR ?= $(PREFIX)/bin
 TOOLCHAIN ?= 1.88.0
 CARGO ?= rustup run $(TOOLCHAIN) cargo
 
-.PHONY: build release install uninstall test lint fmt fmt-check temp-policy check clean toolchain
+.PHONY: build release install uninstall test lint doc fmt fmt-check temp-policy check clean toolchain
 
 toolchain:
 	rustup toolchain install $(TOOLCHAIN) --profile minimal --component clippy,rustfmt
@@ -25,6 +25,9 @@ test:
 
 lint:
 	$(CARGO) clippy --locked --all-targets --all-features -- -D warnings
+
+doc:
+	$(CARGO) doc --locked --no-deps
 
 fmt:
 	$(CARGO) fmt
