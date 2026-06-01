@@ -3396,6 +3396,54 @@ fn doctor_flags_task_worker_not_addressed() {
 }
 
 #[test]
+fn doctor_flags_task_worker_missing_identity() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    claim_agents(&bus, &["alice", "worker"]);
+    run(
+        &bus,
+        &[
+            "conversation",
+            "create",
+            "c",
+            "--participants",
+            "alice,worker",
+            "--starter",
+            "alice",
+        ],
+    );
+    run(
+        &bus,
+        &[
+            "task",
+            "dispatch",
+            "--from",
+            "alice",
+            "--to",
+            "worker",
+            "--conversation",
+            "c",
+            "--tool",
+            "echo",
+            "--args",
+            "{}",
+            "--json",
+        ],
+    );
+    fs::remove_file(bus.join("agents/worker.passport.json")).unwrap();
+
+    let doctor = run_fail(&bus, &["doctor", "--json"]);
+    let report: serde_json::Value = serde_json::from_slice(&doctor.stdout).unwrap();
+    assert!(
+        report["issues"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|issue| issue["code"] == "task_worker_identity_missing")
+    );
+}
+
+#[test]
 fn doctor_reports_corrupt_json_without_mutating() {
     let bus = temp_bus();
     run(&bus, &["init"]);

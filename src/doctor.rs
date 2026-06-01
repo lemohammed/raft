@@ -679,6 +679,23 @@ fn doctor_check_message(
                 format!("task worker @{worker} is not an explicit recipient"),
             );
         }
+        if let Some(worker) = message.needs_response_from.first() {
+            match crate::identity::load_passport(root, worker) {
+                Ok(Some(_)) => {}
+                Ok(None) => report.error(
+                    root,
+                    path,
+                    "task_worker_identity_missing",
+                    format!("task worker @{worker} has no passport"),
+                ),
+                Err(err) => report.error(
+                    root,
+                    path,
+                    "task_worker_identity_invalid",
+                    format!("task worker @{worker} passport is invalid: {}", err.message),
+                ),
+            }
+        }
         match crate::task::TaskBody::parse(&message.body) {
             Ok(body) => {
                 if let Some(token) = &body.capability
