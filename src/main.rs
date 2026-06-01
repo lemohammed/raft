@@ -1657,6 +1657,8 @@ fn cmd_channel_join(root: &Path, args: ChannelJoinArgs) -> Result<()> {
     let channel_id = validate_id(&args.channel, "channel id")?;
     let agent_id = validate_id(&args.agent, "agent id")?;
     ensure_root(root)?;
+    let _agent_record: Agent =
+        read_json(&agent_path(root, &agent_id))?.ok_or_else(|| not_claimed(root, &agent_id))?;
     let _lock = DirLock::acquire(
         root,
         &format!("conversation-{channel_id}"),

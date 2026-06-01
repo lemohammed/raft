@@ -7052,6 +7052,22 @@ fn channel_joiner_is_not_flooded_with_pre_join_broadcasts() {
 }
 
 #[test]
+fn channel_join_rejects_unclaimed_agent() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(&bus, &["claim", "alice", "--workspace", "."]);
+    run(&bus, &["channel", "create", "ops", "--creator", "alice"]);
+
+    let denied = run_fail(
+        &bus,
+        &["channel", "join", "ops", "--agent", "ghost", "--json"],
+    );
+    let err: serde_json::Value = serde_json::from_slice(&denied.stderr).unwrap();
+    assert_eq!(err["error"]["code"], "not_claimed");
+    assert!(err["error"]["message"].as_str().unwrap().contains("@ghost"));
+}
+
+#[test]
 fn an_ask_can_require_a_reply_from_one_agent_and_an_ack_from_everyone() {
     let bus = temp_bus();
     run(&bus, &["init"]);
