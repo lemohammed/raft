@@ -614,6 +614,16 @@ fn doctor_check_message(
             );
         }
     }
+    for awaited in &message.needs_response_from {
+        if !meta.participants.iter().any(|item| item == awaited) {
+            report.error(
+                root,
+                path,
+                "awaited_not_participant",
+                format!("awaited agent @{awaited} is not a participant"),
+            );
+        }
+    }
     doctor_check_time(root, path, report, "created_at", &message.created_at);
     if message.requires_ack && receipt_recipients(message, meta).is_empty() {
         report.warn(
