@@ -2737,6 +2737,62 @@ fn send_rejects_manual_task_kind() {
 }
 
 #[test]
+fn reply_rejects_manual_task_kind() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    claim_agents(&bus, &["a", "b"]);
+    run(
+        &bus,
+        &[
+            "conversation",
+            "create",
+            "c",
+            "--participants",
+            "a,b",
+            "--starter",
+            "a",
+        ],
+    );
+    let parent = run(
+        &bus,
+        &[
+            "send",
+            "--conversation",
+            "c",
+            "--from",
+            "a",
+            "--to",
+            "b",
+            "--body",
+            "please reply",
+        ],
+    );
+    let parent_id = String::from_utf8(parent.stdout).unwrap().trim().to_string();
+    let denied = run_fail(
+        &bus,
+        &[
+            "reply",
+            &parent_id,
+            "--from",
+            "b",
+            "--kind",
+            "task",
+            "--body",
+            "not a task body",
+            "--json",
+        ],
+    );
+    let err: serde_json::Value = serde_json::from_slice(&denied.stderr).unwrap();
+    assert_eq!(err["error"]["code"], "parse");
+    assert!(
+        err["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("task dispatch")
+    );
+}
+
+#[test]
 fn records_include_schema_versions_and_journal_entries() {
     let bus = temp_bus();
     run(&bus, &["init"]);
