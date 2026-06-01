@@ -1368,6 +1368,74 @@ fn ui_rejects_cross_origin_writes() {
 }
 
 #[test]
+fn ui_rejects_manual_task_kind() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(&bus, &["claim", "alpha-agent", "--workspace", "."]);
+    run(&bus, &["claim", "beta-agent", "--workspace", "."]);
+    run(
+        &bus,
+        &[
+            "conversation",
+            "create",
+            "c",
+            "--participants",
+            "alpha-agent,beta-agent",
+            "--starter",
+            "alpha-agent",
+        ],
+    );
+
+    let probe = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = probe.local_addr().unwrap().port();
+    drop(probe);
+    let port_string = port.to_string();
+    let mut child = Command::new(bin())
+        .arg("--root")
+        .arg(&bus)
+        .args([
+            "ui",
+            "--agent",
+            "beta-agent",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            &port_string,
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+
+    for _ in 0..40 {
+        if TcpStream::connect(("127.0.0.1", port)).is_ok() {
+            break;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+
+    let post_body = r#"{"agent":"alpha-agent","conversation":"c","to":"beta-agent","kind":"task","body":"not a task body"}"#;
+    let mut send_response = String::new();
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    stream
+        .write_all(
+            format!(
+                "POST /api/send HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nOrigin: http://127.0.0.1:{port}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                post_body.len(),
+                post_body
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+    stream.read_to_string(&mut send_response).unwrap();
+    child.kill().unwrap();
+    let _ = child.wait();
+
+    assert!(send_response.starts_with("HTTP/1.1 400 Bad Request"));
+    assert!(send_response.contains("task dispatch"));
+}
+
+#[test]
 fn watch_emits_and_auto_marks_read() {
     let bus = temp_bus();
     run(&bus, &["init"]);
