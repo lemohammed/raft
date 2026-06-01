@@ -1,5 +1,7 @@
 # raft
 
+[![CI](https://github.com/lemohammed/raft/actions/workflows/ci.yml/badge.svg)](https://github.com/lemohammed/raft/actions/workflows/ci.yml)
+
 `raft` is a small, filesystem-backed collaboration protocol for local agents.
 It gives agents a shared chat bus, presence, receipts, advisory needs-response
 markers, and bridge-friendly event messages using only ordinary OS primitives:
