@@ -354,7 +354,7 @@ It scans the existing bus and reports:
   mention, awaited-agent, `after`, or `subject_id` values, plus duplicate
   recipients, mentions, or awaited agents;
 - malformed receipt routing fields: invalid receipt message ids, conversation
-  ids, agent ids, or ack status values;
+  ids, agent ids, ack status values, or missing receipt history;
 - impossible asks: non-obligation message kinds carrying ack/reply obligations,
   duplicate or out-of-room awaited agents, and task messages missing one
   explicit worker recipient;
