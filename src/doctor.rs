@@ -514,6 +514,11 @@ fn doctor_scan_messages(
         message_ids.insert(message.id.clone());
         messages.push((path, message));
     }
+    let task_ids: BTreeSet<String> = messages
+        .iter()
+        .filter(|(_, message)| message.kind == "task")
+        .map(|(_, message)| message.id.clone())
+        .collect();
     for (path, message) in messages {
         if let Some(after) = message.after.as_deref()
             && !message_ids.contains(after)
@@ -523,6 +528,18 @@ fn doctor_scan_messages(
                 &path,
                 "dangling_after",
                 format!("after points to missing message {after:?}"),
+            );
+        }
+        if let Some(after) = message.after.as_deref()
+            && task_ids.contains(after)
+            && message.kind == "message"
+            && let Err(err) = serde_json::from_str::<crate::task::TaskResult>(&message.body)
+        {
+            report.error(
+                root,
+                &path,
+                "invalid_task_result",
+                format!("reply to task {after:?} is not a valid task result: {err}"),
             );
         }
     }
