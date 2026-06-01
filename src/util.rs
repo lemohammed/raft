@@ -255,13 +255,22 @@ pub(crate) fn is_obligation_kind(kind: &str) -> bool {
 
 pub(crate) fn validate_subject_id(value: &str) -> Result<String> {
     if value.is_empty() || value.len() > 160 {
-        bail!("invalid subject id: use 1-160 printable characters");
+        return Err(RaftError::coded(
+            "parse",
+            "invalid subject id: use 1-160 printable characters",
+        ));
     }
     if value.chars().any(|ch| ch.is_control()) {
-        bail!("invalid subject id: control characters are not allowed");
+        return Err(RaftError::coded(
+            "parse",
+            "invalid subject id: control characters are not allowed",
+        ));
     }
     if value.contains('#') {
-        bail!("invalid subject id: '#' is reserved for raft rate-limit keys");
+        return Err(RaftError::coded(
+            "parse",
+            "invalid subject id: '#' is reserved for raft rate-limit keys",
+        ));
     }
     Ok(value.to_string())
 }

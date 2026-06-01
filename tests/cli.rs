@@ -2721,9 +2721,17 @@ fn subject_id_rejects_rate_key_separator() {
             "telegram:chat#user",
             "--body",
             "cannot collide rate keys",
+            "--json",
         ],
     );
-    assert!(String::from_utf8_lossy(&denied.stderr).contains("reserved"));
+    let err: serde_json::Value = serde_json::from_slice(&denied.stderr).unwrap();
+    assert_eq!(err["error"]["code"], "parse");
+    assert!(
+        err["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("reserved")
+    );
 }
 
 #[test]
