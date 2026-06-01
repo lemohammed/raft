@@ -8972,6 +8972,29 @@ fn grant_rejects_bad_ttl_with_parse_code() {
 }
 
 #[test]
+fn grant_rejects_bad_ttl_unit_with_parse_code() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    claim_agents(&bus, &["alice", "worker"]);
+
+    let denied = run_fail(
+        &bus,
+        &[
+            "grant", "new", "--issuer", "alice", "--to", "worker", "--action", "tool.run", "--ttl",
+            "1w", "--json",
+        ],
+    );
+    let err: serde_json::Value = serde_json::from_slice(&denied.stderr).unwrap();
+    assert_eq!(err["error"]["code"], "parse");
+    assert!(
+        err["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("use s, m, h, or d")
+    );
+}
+
+#[test]
 fn task_dispatch_requires_json_object_arguments() {
     let bus = temp_bus();
     run(&bus, &["init"]);
