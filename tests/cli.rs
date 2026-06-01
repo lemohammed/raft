@@ -3749,6 +3749,56 @@ fn doctor_flags_invalid_awaited_agents() {
 }
 
 #[test]
+fn doctor_flags_invalid_after_ids() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    claim_agents(&bus, &["alice", "bob"]);
+    run(
+        &bus,
+        &[
+            "conversation",
+            "create",
+            "c",
+            "--participants",
+            "alice,bob",
+            "--starter",
+            "alice",
+        ],
+    );
+    let sent = run(
+        &bus,
+        &[
+            "send",
+            "--conversation",
+            "c",
+            "--from",
+            "alice",
+            "--to",
+            "bob",
+            "--body",
+            "hello",
+            "--json",
+        ],
+    );
+    let sent_json: serde_json::Value = serde_json::from_slice(&sent.stdout).unwrap();
+    let message_id = sent_json["message_id"].as_str().unwrap();
+    let path = bus.join(format!("conversations/c/messages/{message_id}.json"));
+    let mut message: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    message["after"] = serde_json::json!("@parent");
+    fs::write(&path, serde_json::to_vec_pretty(&message).unwrap()).unwrap();
+
+    let doctor = run_fail(&bus, &["doctor", "--json"]);
+    let report: serde_json::Value = serde_json::from_slice(&doctor.stdout).unwrap();
+    assert!(
+        report["issues"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|issue| issue["code"] == "invalid_after_id")
+    );
+}
+
+#[test]
 fn doctor_flags_oversized_summary_messages() {
     let bus = temp_bus();
     run(&bus, &["init"]);

@@ -659,6 +659,11 @@ fn doctor_check_message(
             format!("message subject_id is invalid: {}", err.message),
         );
     }
+    if let Some(after) = message.after.as_deref()
+        && let Err(err) = validate_id(after, "after message id")
+    {
+        report.error(root, path, "invalid_after_id", err.to_string());
+    }
     doctor_check_time(root, path, report, "created_at", &message.created_at);
     if message.requires_ack && receipt_recipients(message, meta).is_empty() {
         report.warn(
