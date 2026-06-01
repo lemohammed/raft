@@ -16,8 +16,9 @@ SMB, Dropbox, iCloud Drive, or another network/sync filesystem; the lock and
 rename assumptions are local filesystem assumptions.
 
 The protocol is local-first. Mesh and remote-execution records are experimental
-building blocks that must be replicated over a real transport; do not treat a
-shared filesystem as the network transport.
+building blocks. Cross-node replication uses signed mesh packets imported into
+each node's own local bus; do not treat a shared filesystem as the network
+transport.
 
 The CLI is only one client for this protocol. Other local agents may read and
 write the same records directly if they preserve the locking, atomic-write,
@@ -202,6 +203,42 @@ Protocol clients should render live agents prominently enough that an operator
 can answer: who is online, who is blocked, and what each agent is currently
 doing. Stale agents should remain inspectable but should not be mixed into the
 live roster.
+
+## Mesh Packets
+
+Mesh v1 replication is a signed packet format, not a shared directory. The CLI
+can export any signed message or receipt into a standalone JSON packet and
+import that packet into another bus:
+
+```sh
+raft mesh export-message m-abc123 --out run/mesh-out --from-node node-a --to-node node-b
+raft mesh export-receipt m-abc123 --agent bob --out run/mesh-out --from-node node-b
+raft mesh import run/mesh-out/mesh-pkt-....json --to-node node-b
+```
+
+A mesh packet carries:
+
+- `_v`, `packet_id`, `from_node`, optional `to_node`, `issued_at`, and `nonce`;
+- `record_type` (`message` or `receipt`), `record_id`, and `record_hash`;
+- a minimal conversation manifest: id, participants, channel/private flags;
+- the author's self-signed passport and public key;
+- the embedded signed `message` or `receipt` record;
+- `sig`, an Ed25519 signature by the author key over the canonical packet with
+  only `sig` omitted.
+
+Import is fail-closed. A receiver verifies the optional destination node,
+passport self-signature, packet signature, embedded record hash/signature, and
+conversation membership before writing the record. It then stores the remote
+passport, creates a non-live `away` agent record for the author if the name is
+new, creates the conversation if missing, and writes the message or receipt
+idempotently.
+
+Human-readable agent names are local policy labels; public keys are the mesh
+identity. If the destination already has `agents/<id>.passport.json` or
+`agents/<id>.json` for the imported name, its public key must match the packet
+passport. A different key for the same name is rejected with `conflict`, so the
+first trusted local binding wins until an operator deliberately removes or
+rotates it.
 
 ## Channels And Chats
 

@@ -69,6 +69,20 @@ fn claim_agents(root: &PathBuf, agents: &[&str]) {
     }
 }
 
+fn copy_identity(from: &Path, to: &Path, agent: &str) {
+    fs::create_dir_all(to.join("agents")).unwrap();
+    fs::copy(
+        from.join("agents").join(format!("{agent}.key.json")),
+        to.join("agents").join(format!("{agent}.key.json")),
+    )
+    .unwrap();
+    fs::copy(
+        from.join("agents").join(format!("{agent}.passport.json")),
+        to.join("agents").join(format!("{agent}.passport.json")),
+    )
+    .unwrap();
+}
+
 #[test]
 fn init_creates_staging_directory_without_tmp_directory() {
     let bus = temp_bus();
@@ -9622,6 +9636,326 @@ fn identity_verify_detects_a_tampered_passport() {
     );
     let file_json: serde_json::Value = serde_json::from_slice(&file_verify.stderr).unwrap();
     assert_eq!(file_json["error"]["verified"], false);
+}
+
+#[test]
+fn mesh_exports_and_imports_a_signed_message_packet() {
+    let source = temp_bus();
+    let dest = temp_bus();
+    run(&source, &["init"]);
+    run(&dest, &["init"]);
+    claim_agents(&dest, &["bob"]);
+    copy_identity(&dest, &source, "bob");
+    claim_agents(&source, &["alice", "bob"]);
+    run(
+        &source,
+        &[
+            "conversation",
+            "create",
+            "mesh-room",
+            "--participants",
+            "alice,bob",
+            "--starter",
+            "alice",
+        ],
+    );
+    let sent = run(
+        &source,
+        &[
+            "send",
+            "--conversation",
+            "mesh-room",
+            "--from",
+            "alice",
+            "--to",
+            "bob",
+            "--subject",
+            "mesh handoff",
+            "--body",
+            "carry this across the mesh",
+            "--requires-ack",
+            "--needs-response-from",
+            "bob",
+            "--json",
+        ],
+    );
+    let sent_json: serde_json::Value = serde_json::from_slice(&sent.stdout).unwrap();
+    let message_id = sent_json["message_id"].as_str().unwrap();
+    let out_dir = source.join("mesh-out");
+
+    let exported = run(
+        &source,
+        &[
+            "mesh",
+            "export-message",
+            message_id,
+            "--out",
+            out_dir.to_str().unwrap(),
+            "--from-node",
+            "source",
+            "--to-node",
+            "dest",
+            "--json",
+        ],
+    );
+    let exported_json: serde_json::Value = serde_json::from_slice(&exported.stdout).unwrap();
+    assert_eq!(exported_json["ok"], serde_json::json!(true));
+    assert_eq!(exported_json["record_type"], "message");
+    let packet_path = exported_json["packet"].as_str().unwrap();
+    assert!(Path::new(packet_path).is_file());
+
+    let imported = run(
+        &dest,
+        &["mesh", "import", packet_path, "--to-node", "dest", "--json"],
+    );
+    let imported_json: serde_json::Value = serde_json::from_slice(&imported.stdout).unwrap();
+    assert_eq!(imported_json["ok"], serde_json::json!(true));
+    assert_eq!(imported_json["record_type"], "message");
+    assert_eq!(imported_json["record_id"], message_id);
+    assert_eq!(imported_json["imported"], serde_json::json!(true));
+    assert_eq!(imported_json["duplicate"], serde_json::json!(false));
+
+    assert!(dest.join("agents/alice.passport.json").is_file());
+    assert!(dest.join("agents/alice.json").is_file());
+    let imported_message_path = dest
+        .join("conversations/mesh-room/messages")
+        .join(format!("{message_id}.json"));
+    let imported_message: serde_json::Value =
+        serde_json::from_slice(&fs::read(&imported_message_path).unwrap()).unwrap();
+    assert_eq!(imported_message["from"], "alice");
+    assert_eq!(imported_message["body"], "carry this across the mesh");
+    assert!(imported_message["sig"].as_str().is_some());
+
+    let duplicate = run(
+        &dest,
+        &["mesh", "import", packet_path, "--to-node", "dest", "--json"],
+    );
+    let duplicate_json: serde_json::Value = serde_json::from_slice(&duplicate.stdout).unwrap();
+    assert_eq!(duplicate_json["imported"], serde_json::json!(false));
+    assert_eq!(duplicate_json["duplicate"], serde_json::json!(true));
+
+    let doctor = run(&dest, &["doctor", "--json"]);
+    let report: serde_json::Value = serde_json::from_slice(&doctor.stdout).unwrap();
+    assert_eq!(report["ok"], serde_json::json!(true));
+
+    run(
+        &dest,
+        &[
+            "ack",
+            "bob",
+            message_id,
+            "--status",
+            "done",
+            "--note",
+            "received through mesh",
+        ],
+    );
+    let receipt_out = dest.join("mesh-out");
+    let receipt_exported = run(
+        &dest,
+        &[
+            "mesh",
+            "export-receipt",
+            message_id,
+            "--agent",
+            "bob",
+            "--out",
+            receipt_out.to_str().unwrap(),
+            "--from-node",
+            "dest",
+            "--to-node",
+            "source",
+            "--json",
+        ],
+    );
+    let receipt_exported_json: serde_json::Value =
+        serde_json::from_slice(&receipt_exported.stdout).unwrap();
+    assert_eq!(receipt_exported_json["record_type"], "receipt");
+    let receipt_packet = receipt_exported_json["packet"].as_str().unwrap();
+    let receipt_imported = run(
+        &source,
+        &[
+            "mesh",
+            "import",
+            receipt_packet,
+            "--to-node",
+            "source",
+            "--json",
+        ],
+    );
+    let receipt_imported_json: serde_json::Value =
+        serde_json::from_slice(&receipt_imported.stdout).unwrap();
+    assert_eq!(receipt_imported_json["record_type"], "receipt");
+    assert_eq!(receipt_imported_json["imported"], serde_json::json!(true));
+    let receipt: serde_json::Value = serde_json::from_slice(
+        &fs::read(
+            source
+                .join("conversations/mesh-room/receipts")
+                .join(message_id)
+                .join("bob.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(receipt["status"], "done");
+    assert_eq!(receipt["agent"], "bob");
+
+    let source_doctor = run(&source, &["doctor", "--json"]);
+    let source_report: serde_json::Value = serde_json::from_slice(&source_doctor.stdout).unwrap();
+    assert_eq!(source_report["ok"], serde_json::json!(true));
+}
+
+#[test]
+fn mesh_import_rejects_a_tampered_message_packet() {
+    let source = temp_bus();
+    let dest = temp_bus();
+    run(&source, &["init"]);
+    run(&dest, &["init"]);
+    claim_agents(&source, &["alice", "bob"]);
+    claim_agents(&dest, &["bob"]);
+    run(
+        &source,
+        &[
+            "conversation",
+            "create",
+            "mesh-room",
+            "--participants",
+            "alice,bob",
+            "--starter",
+            "alice",
+        ],
+    );
+    let sent = run(
+        &source,
+        &[
+            "send",
+            "--conversation",
+            "mesh-room",
+            "--from",
+            "alice",
+            "--to",
+            "bob",
+            "--subject",
+            "mesh handoff",
+            "--body",
+            "original body",
+            "--json",
+        ],
+    );
+    let sent_json: serde_json::Value = serde_json::from_slice(&sent.stdout).unwrap();
+    let message_id = sent_json["message_id"].as_str().unwrap();
+    let out_dir = source.join("mesh-out");
+    let exported = run(
+        &source,
+        &[
+            "mesh",
+            "export-message",
+            message_id,
+            "--out",
+            out_dir.to_str().unwrap(),
+            "--from-node",
+            "source",
+            "--json",
+        ],
+    );
+    let exported_json: serde_json::Value = serde_json::from_slice(&exported.stdout).unwrap();
+    let packet_path = PathBuf::from(exported_json["packet"].as_str().unwrap());
+    let mut packet: serde_json::Value =
+        serde_json::from_slice(&fs::read(&packet_path).unwrap()).unwrap();
+    packet["record"]["body"] = serde_json::json!("edited after export");
+    fs::write(&packet_path, serde_json::to_vec_pretty(&packet).unwrap()).unwrap();
+
+    let rejected = run_fail(
+        &dest,
+        &[
+            "mesh",
+            "import",
+            packet_path.to_str().unwrap(),
+            "--to-node",
+            "dest",
+            "--json",
+        ],
+    );
+    let rejected_json: serde_json::Value = serde_json::from_slice(&rejected.stderr).unwrap();
+    assert_eq!(rejected_json["error"]["code"], "auth_failed");
+    assert!(
+        !dest
+            .join("conversations/mesh-room/messages")
+            .join(format!("{message_id}.json"))
+            .exists()
+    );
+}
+
+#[test]
+fn mesh_import_rejects_a_name_bound_to_a_different_key() {
+    let source = temp_bus();
+    let dest = temp_bus();
+    run(&source, &["init"]);
+    run(&dest, &["init"]);
+    claim_agents(&source, &["alice", "bob"]);
+    claim_agents(&dest, &["alice", "bob"]);
+    run(
+        &source,
+        &[
+            "conversation",
+            "create",
+            "mesh-room",
+            "--participants",
+            "alice,bob",
+            "--starter",
+            "alice",
+        ],
+    );
+    let sent = run(
+        &source,
+        &[
+            "send",
+            "--conversation",
+            "mesh-room",
+            "--from",
+            "alice",
+            "--to",
+            "bob",
+            "--subject",
+            "name collision",
+            "--body",
+            "this alice is not the destination alice",
+            "--json",
+        ],
+    );
+    let sent_json: serde_json::Value = serde_json::from_slice(&sent.stdout).unwrap();
+    let message_id = sent_json["message_id"].as_str().unwrap();
+    let out_dir = source.join("mesh-out");
+    let exported = run(
+        &source,
+        &[
+            "mesh",
+            "export-message",
+            message_id,
+            "--out",
+            out_dir.to_str().unwrap(),
+            "--from-node",
+            "source",
+            "--to-node",
+            "dest",
+            "--json",
+        ],
+    );
+    let exported_json: serde_json::Value = serde_json::from_slice(&exported.stdout).unwrap();
+    let packet_path = exported_json["packet"].as_str().unwrap();
+
+    let rejected = run_fail(
+        &dest,
+        &["mesh", "import", packet_path, "--to-node", "dest", "--json"],
+    );
+    let rejected_json: serde_json::Value = serde_json::from_slice(&rejected.stderr).unwrap();
+    assert_eq!(rejected_json["error"]["code"], "conflict");
+    assert!(
+        !dest
+            .join("conversations/mesh-room/messages")
+            .join(format!("{message_id}.json"))
+            .exists()
+    );
 }
 
 #[test]

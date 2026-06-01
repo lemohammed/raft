@@ -5,6 +5,7 @@ mod cli;
 mod crypto;
 mod doctor;
 mod identity;
+mod mesh;
 mod storage;
 mod task;
 mod types;
@@ -145,6 +146,11 @@ fn command_wants_json(command: &Commands) -> bool {
             TaskCommand::Status(args) => args.json,
             TaskCommand::Cancel(args) => args.json,
         },
+        Commands::Mesh { command } => match command {
+            MeshCommand::ExportMessage(args) => args.json,
+            MeshCommand::ExportReceipt(args) => args.json,
+            MeshCommand::Import(args) => args.json,
+        },
         Commands::Swarm { command } => match command {
             SwarmCommand::Candidates(args) => args.json,
             SwarmCommand::Assign(args) => args.json,
@@ -214,6 +220,11 @@ fn run(root: PathBuf, command: Commands) -> Result<()> {
             TaskCommand::Dispatch(args) => cmd_task_dispatch(&root, args),
             TaskCommand::Status(args) => cmd_task_status(&root, args),
             TaskCommand::Cancel(args) => cmd_task_cancel(&root, args),
+        },
+        Commands::Mesh { command } => match command {
+            MeshCommand::ExportMessage(args) => mesh::cmd_mesh_export_message(&root, args),
+            MeshCommand::ExportReceipt(args) => mesh::cmd_mesh_export_receipt(&root, args),
+            MeshCommand::Import(args) => mesh::cmd_mesh_import(&root, args),
         },
         Commands::Swarm { command } => match command {
             SwarmCommand::Candidates(args) => cmd_swarm_candidates(&root, args),

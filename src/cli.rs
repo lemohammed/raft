@@ -43,6 +43,8 @@ ERROR CODES (stable; surfaced as error.code in --json mode)
   not_found         referenced agent, channel, or conversation does not exist
   not_participant   agent or recipient is not a participant in the conversation
   not_awaited       `ack --require-open` closed no open ask you are awaited on
+  auth_failed       a signature, passport, signed record, or local key binding \
+failed verification
   not_authorized    a capability token does not authorize the requested action
   conflict          a resource already exists: an agent name claimed by \
 another holder, or a channel/conversation created without --if-missing
@@ -143,6 +145,11 @@ pub(crate) enum Commands {
         #[command(subcommand)]
         command: TaskCommand,
     },
+    /// Export and import signed mesh packets between bus roots.
+    Mesh {
+        #[command(subcommand)]
+        command: MeshCommand,
+    },
     /// Rank and assign agents for swarm-style collaboration.
     Swarm {
         #[command(subcommand)]
@@ -215,6 +222,67 @@ pub(crate) struct TaskCancelArgs {
     /// Optional reason recorded on the cancellation notice.
     #[arg(long)]
     pub(crate) reason: Option<String>,
+    /// Emit machine-readable JSON instead of text.
+    #[arg(long)]
+    pub(crate) json: bool,
+}
+
+#[derive(Subcommand)]
+pub(crate) enum MeshCommand {
+    /// Export a signed message packet that another bus can import.
+    ExportMessage(MeshExportMessageArgs),
+    /// Export a signed receipt packet that another bus can import.
+    ExportReceipt(MeshExportReceiptArgs),
+    /// Import and verify a signed mesh packet.
+    Import(MeshImportArgs),
+}
+
+#[derive(Args)]
+pub(crate) struct MeshExportMessageArgs {
+    /// Message id to export.
+    pub(crate) message: String,
+    /// Directory where the packet JSON should be written.
+    #[arg(long)]
+    pub(crate) out: PathBuf,
+    /// Sender-side node id recorded in the packet.
+    #[arg(long = "from-node", default_value = "local")]
+    pub(crate) from_node: String,
+    /// Optional intended recipient node id.
+    #[arg(long = "to-node")]
+    pub(crate) to_node: Option<String>,
+    /// Emit machine-readable JSON instead of text.
+    #[arg(long)]
+    pub(crate) json: bool,
+}
+
+#[derive(Args)]
+pub(crate) struct MeshExportReceiptArgs {
+    /// Message id whose receipt should be exported.
+    pub(crate) message: String,
+    /// Agent id that authored the receipt.
+    #[arg(long)]
+    pub(crate) agent: String,
+    /// Directory where the packet JSON should be written.
+    #[arg(long)]
+    pub(crate) out: PathBuf,
+    /// Sender-side node id recorded in the packet.
+    #[arg(long = "from-node", default_value = "local")]
+    pub(crate) from_node: String,
+    /// Optional intended recipient node id.
+    #[arg(long = "to-node")]
+    pub(crate) to_node: Option<String>,
+    /// Emit machine-readable JSON instead of text.
+    #[arg(long)]
+    pub(crate) json: bool,
+}
+
+#[derive(Args)]
+pub(crate) struct MeshImportArgs {
+    /// Packet JSON produced by `mesh export-message` or `mesh export-receipt`.
+    pub(crate) packet: PathBuf,
+    /// Reject packets addressed to a different node.
+    #[arg(long = "to-node")]
+    pub(crate) to_node: Option<String>,
     /// Emit machine-readable JSON instead of text.
     #[arg(long)]
     pub(crate) json: bool,

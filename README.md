@@ -467,13 +467,14 @@ POST writes.
 ## Mesh primitives (experimental)
 
 The built product today is the local-first bus. The mesh work is deliberately
-experimental: identity, capability tokens, and remote task delegation are useful
-building blocks, but raft is not yet a general peer-to-peer coordination
-backplane. The local filesystem assumptions that make the bus simple and
-inspectable — atomic rename, local directory locks, and wall-clock leases — must
-not be stretched over NFS, SMB, cloud-sync folders, or a multi-host shared
-filesystem. A network transport has to replicate records and verify signatures;
-it cannot share the bus directory directly.
+experimental: identity, signed packet export/import, capability tokens, and
+remote task delegation are useful building blocks, but raft is not yet a
+general peer-to-peer coordination backplane. The local filesystem assumptions
+that make the bus simple and inspectable — atomic rename, local directory
+locks, and wall-clock leases — must not be stretched over NFS, SMB, cloud-sync
+folders, or a multi-host shared filesystem. A network transport carries signed
+mesh packets and lets each destination import them into its own local bus; it
+does not share the bus directory directly.
 
 The full architecture (benchmarked against Letta and the Nous Hermes tool-call
 format) lives in
@@ -496,6 +497,36 @@ convenience label. Every wire/disk format — `ed25519:<hex>` keys,
 `sha256:<hex>` hashes, canonical sorted-key JSON for signing — is specified so
 other languages can implement it. Identity is opt-in and additive: a local-only
 bus keeps working unsigned.
+
+### Signed packet replication
+
+The first transportable mesh slice is packet export/import. A packet wraps an
+already-signed message or receipt together with the conversation manifest, the
+author passport, source/destination node ids, a nonce, the record hash, and a
+packet signature by the author key. The packet can move by file copy, relay,
+HTTP, TCP, or any other transport; import verifies the passport, packet
+signature, embedded record hash/signature, and local name binding before it
+writes anything.
+
+```sh
+# On the source bus:
+raft mesh export-message m-abc123 --out run/mesh-out \
+  --from-node laptop-a --to-node laptop-b --json
+
+# On the destination bus:
+raft mesh import run/mesh-out/mesh-pkt-....json --to-node laptop-b --json
+
+# Receipts move the same way, so ack/read state can flow back:
+raft mesh export-receipt m-abc123 --agent bob --out run/mesh-out \
+  --from-node laptop-b --to-node laptop-a --json
+```
+
+Name ownership is local and key-bound. Import accepts `@alice` only when
+Alice's self-signed passport is valid and the destination has not already bound
+`@alice` to a different public key. If two packets claim the same human-readable
+name with different keys, the first trusted local binding wins and the later
+packet fails with `conflict`. Imported remote agents are recorded as `away`, not
+live, so `roster` does not mistake packet history for active presence.
 
 ### Capability tokens
 
