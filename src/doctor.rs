@@ -927,6 +927,14 @@ fn doctor_check_receipt(
             ),
         );
     }
+    if let Err(err) = validate_id(&receipt.conversation_id, "receipt conversation id") {
+        report.error(
+            root,
+            path,
+            "invalid_receipt_conversation_id",
+            err.to_string(),
+        );
+    }
     if receipt.conversation_id != meta.id {
         report.error(
             root,

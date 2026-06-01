@@ -4687,6 +4687,56 @@ fn doctor_flags_invalid_receipt_message_ids() {
 }
 
 #[test]
+fn doctor_flags_invalid_receipt_conversation_ids() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    claim_agents(&bus, &["alice", "bob"]);
+    run(
+        &bus,
+        &[
+            "conversation",
+            "create",
+            "c",
+            "--participants",
+            "alice,bob",
+            "--starter",
+            "alice",
+        ],
+    );
+    let sent = run(
+        &bus,
+        &[
+            "send",
+            "--conversation",
+            "c",
+            "--from",
+            "alice",
+            "--to",
+            "bob",
+            "--body",
+            "ack this",
+            "--requires-ack",
+        ],
+    );
+    let message_id = String::from_utf8(sent.stdout).unwrap().trim().to_string();
+    run(&bus, &["ack", "bob", &message_id, "--status", "done"]);
+    let path = bus.join(format!("conversations/c/receipts/{message_id}/bob.json"));
+    let mut receipt: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    receipt["conversation_id"] = serde_json::json!("@c");
+    fs::write(&path, serde_json::to_vec_pretty(&receipt).unwrap()).unwrap();
+
+    let doctor = run_fail(&bus, &["doctor", "--json"]);
+    let report: serde_json::Value = serde_json::from_slice(&doctor.stdout).unwrap();
+    assert!(
+        report["issues"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|issue| issue["code"] == "invalid_receipt_conversation_id")
+    );
+}
+
+#[test]
 fn doctor_strict_fails_on_warnings() {
     let bus = temp_bus();
     run(&bus, &["init"]);
