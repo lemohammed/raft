@@ -1931,6 +1931,8 @@ fn cmd_conversation_add(root: &Path, args: ConversationAddArgs) -> Result<()> {
     let conversation_id = validate_id(&args.conversation, "conversation id")?;
     let agent_id = validate_id(&args.agent, "agent id")?;
     ensure_root(root)?;
+    let _agent_record: Agent =
+        read_json(&agent_path(root, &agent_id))?.ok_or_else(|| not_claimed(root, &agent_id))?;
     let _lock = DirLock::acquire(
         root,
         &format!("conversation-{conversation_id}"),

@@ -4581,6 +4581,33 @@ fn not_found_suggests_nearest_conversation_id() {
 }
 
 #[test]
+fn conversation_add_rejects_unclaimed_agent() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    claim_agents(&bus, &["alice", "bob"]);
+    run(
+        &bus,
+        &[
+            "conversation",
+            "create",
+            "proj",
+            "--participants",
+            "alice,bob",
+            "--starter",
+            "alice",
+        ],
+    );
+
+    let denied = run_fail(
+        &bus,
+        &["conversation", "add", "proj", "--agent", "ghost", "--json"],
+    );
+    let err: serde_json::Value = serde_json::from_slice(&denied.stderr).unwrap();
+    assert_eq!(err["error"]["code"], "not_claimed");
+    assert!(err["error"]["message"].as_str().unwrap().contains("@ghost"));
+}
+
+#[test]
 fn conversation_remove_drops_a_participant_and_blocks_their_sends() {
     let bus = temp_bus();
     run(&bus, &["init"]);
