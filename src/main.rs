@@ -1569,6 +1569,10 @@ fn cmd_channel_create(root: &Path, args: ChannelCreateArgs) -> Result<()> {
     participants.extend(split_csv(&args.members)?);
     let participants = unique(participants);
     ensure_root(root)?;
+    for participant in &participants {
+        let _agent_record: Agent = read_json(&agent_path(root, participant))?
+            .ok_or_else(|| not_claimed(root, participant))?;
+    }
     let conv = conversation_path(root, &channel_id)?;
     let _lock = DirLock::acquire(
         root,
