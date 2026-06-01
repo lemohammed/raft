@@ -9673,7 +9673,7 @@ fn executor_rejects_a_task_outside_the_capability() {
         ],
     );
 
-    // The capability authorizes only `echo`, but the task asks for `deploy`.
+    // The capability authorizes only `echo`.
     let cap = bus.join("cap.json");
     run(
         &bus,
@@ -9707,7 +9707,7 @@ fn executor_rejects_a_task_outside_the_capability() {
             "--conversation",
             "c",
             "--tool",
-            "deploy",
+            "echo",
             "--args",
             "{}",
             "--cap",
@@ -9719,6 +9719,14 @@ fn executor_rejects_a_task_outside_the_capability() {
         .as_str()
         .unwrap()
         .to_string();
+    let task_path = bus.join(format!("conversations/c/messages/{task_id}.json"));
+    let mut message: serde_json::Value =
+        serde_json::from_slice(&fs::read(&task_path).unwrap()).unwrap();
+    let mut body: serde_json::Value =
+        serde_json::from_str(message["body"].as_str().unwrap()).unwrap();
+    body["tool_call"]["name"] = serde_json::json!("deploy");
+    message["body"] = serde_json::json!(serde_json::to_string(&body).unwrap());
+    fs::write(&task_path, serde_json::to_vec_pretty(&message).unwrap()).unwrap();
 
     // Even with the tool registered, the executor must refuse: the capability
     // does not authorize `deploy`. The obligation closes as rejected, not done.

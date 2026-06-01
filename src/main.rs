@@ -417,6 +417,24 @@ fn build_task_body(
     })
 }
 
+fn authorize_task_capability(
+    token: &capability::Token,
+    conversation_id: &str,
+    body: &task::TaskBody,
+    expected_root: Option<&str>,
+) -> Result<()> {
+    let request = capability::AuthRequest {
+        action: "tool.run",
+        conversation: Some(conversation_id),
+        tool: Some(&body.tool_call.name),
+        env: None,
+        now: Utc::now(),
+        requested_runtime_s: body.limits.max_runtime_s,
+        requested_output_bytes: body.limits.max_output_bytes,
+    };
+    capability::authorize(token, expected_root, &request)
+}
+
 fn send_task_message(
     root: &Path,
     conversation_id: String,
@@ -467,16 +485,7 @@ fn cmd_task_dispatch(root: &Path, args: TaskDispatchArgs) -> Result<()> {
                 "capability holder does not match selected worker"
             );
         }
-        let request = capability::AuthRequest {
-            action: "tool.run",
-            conversation: Some(&conversation_id),
-            tool: Some(&body.tool_call.name),
-            env: None,
-            now: Utc::now(),
-            requested_runtime_s: body.limits.max_runtime_s,
-            requested_output_bytes: body.limits.max_output_bytes,
-        };
-        capability::authorize(token, None, &request)?;
+        authorize_task_capability(token, &conversation_id, &body, None)?;
     }
     let message = send_task_message(
         root,
@@ -694,16 +703,9 @@ fn run_pending_tasks(
                 processed += 1;
                 continue;
             }
-            let request = capability::AuthRequest {
-                action: "tool.run",
-                conversation: Some(&message.conversation_id),
-                tool: Some(&body.tool_call.name),
-                env: None,
-                now: Utc::now(),
-                requested_runtime_s: body.limits.max_runtime_s,
-                requested_output_bytes: body.limits.max_output_bytes,
-            };
-            if let Err(err) = capability::authorize(token, trusted_root, &request) {
+            if let Err(err) =
+                authorize_task_capability(token, &message.conversation_id, &body, trusted_root)
+            {
                 record_task_outcome(
                     root,
                     worker,
