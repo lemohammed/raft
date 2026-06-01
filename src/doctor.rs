@@ -726,6 +726,14 @@ fn doctor_check_message(
     }
     if message.kind == "task" {
         let mut worker_pubkey = None;
+        if message.requires_ack {
+            report.error(
+                root,
+                path,
+                "task_requires_ack",
+                "task messages must not use requires_ack",
+            );
+        }
         if message.needs_response_from.len() != 1 {
             report.error(
                 root,
