@@ -5001,22 +5001,32 @@ fn parse_since_cutoff(value: &str) -> Result<DateTime<Utc>> {
         return Ok(time);
     }
     let Some((number, unit)) = value.split_at_checked(value.len().saturating_sub(1)) else {
-        bail!("invalid --since {value:?}; use RFC3339 or a duration like 30m, 2h, 7d");
+        bail_code!(
+            "parse",
+            "invalid --since {value:?}; use RFC3339 or a duration like 30m, 2h, 7d"
+        );
     };
     let amount: i64 = number.parse().map_err(|_| {
-        RaftError::new(format!(
-            "invalid --since {value:?}; duration must be numeric"
-        ))
+        RaftError::coded(
+            "parse",
+            format!("invalid --since {value:?}; duration must be numeric"),
+        )
     })?;
     if amount < 0 {
-        bail!("invalid --since {value:?}; duration must be non-negative");
+        bail_code!(
+            "parse",
+            "invalid --since {value:?}; duration must be non-negative"
+        );
     }
     let delta = match unit {
         "s" => TimeDelta::seconds(amount),
         "m" => TimeDelta::minutes(amount),
         "h" => TimeDelta::hours(amount),
         "d" => TimeDelta::days(amount),
-        _ => bail!("invalid --since {value:?}; use s, m, h, or d duration suffix"),
+        _ => bail_code!(
+            "parse",
+            "invalid --since {value:?}; use s, m, h, or d duration suffix"
+        ),
     };
     Ok(Utc::now() - delta)
 }

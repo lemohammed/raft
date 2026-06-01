@@ -1849,6 +1849,28 @@ fn search_rejects_missing_criteria_with_parse_code() {
 }
 
 #[test]
+fn search_rejects_nonnumeric_since_with_parse_code() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(&bus, &["claim", "a", "--workspace", "."]);
+
+    let denied = run_fail(
+        &bus,
+        &[
+            "search", "needle", "--agent", "a", "--since", "soon", "--json",
+        ],
+    );
+    let err: serde_json::Value = serde_json::from_slice(&denied.stderr).unwrap();
+    assert_eq!(err["error"]["code"], "parse");
+    assert!(
+        err["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("duration must be numeric")
+    );
+}
+
+#[test]
 fn thread_renders_after_descendants_as_tree() {
     let bus = temp_bus();
     run(&bus, &["init"]);
