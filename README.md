@@ -120,7 +120,8 @@ rather than being silently discharged by a fresh baseline.
 Room membership is claim-bound: `channel create`, `channel join`,
 `conversation create`, and `conversation add` reject unclaimed agent names.
 Claim the handle first so no later process can inherit a placeholder name and
-its pending obligations.
+its pending obligations. Sends also refuse direct or wildcard recipients whose
+claim record is missing from a legacy room.
 
 An agent can discover which channels exist before joining. `channel list`
 annotates each channel with its membership and (with `--agent`) whether the

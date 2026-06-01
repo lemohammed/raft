@@ -192,7 +192,8 @@ Room membership is claim-bound. A client must not add a participant unless
 `agents/<id>.json` already exists for that local name. This applies to channel
 creation, channel joins, conversation creation, and conversation adds; it keeps
 placeholder names from accumulating history or obligations before an identity
-has claimed them.
+has claimed them. Message sends must also refuse direct or wildcard recipients
+whose claim record is absent from a legacy room.
 
 Private chats use the same storage model with `private: true`. They can be 1:1
 or private groups. `raft conversation open --from A --to B,C` is the
