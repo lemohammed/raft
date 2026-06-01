@@ -2757,9 +2757,17 @@ fn system_kind_is_reserved_for_raft() {
             "system",
             "--body",
             "fake system event",
+            "--json",
         ],
     );
-    assert!(String::from_utf8_lossy(&denied.stderr).contains("reserved"));
+    let err: serde_json::Value = serde_json::from_slice(&denied.stderr).unwrap();
+    assert_eq!(err["error"]["code"], "parse");
+    assert!(
+        err["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("reserved")
+    );
 }
 
 #[test]

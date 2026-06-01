@@ -1,5 +1,5 @@
 use crate::SCHEMA_VERSION;
-use crate::error::Result;
+use crate::error::{RaftError, Result};
 use chrono::{DateTime, SecondsFormat, TimeDelta, Utc};
 use std::collections::BTreeSet;
 use std::env;
@@ -234,8 +234,14 @@ pub(crate) fn slugify_id_segment(value: &str) -> String {
 pub(crate) fn normalize_send_kind(kind: &str) -> Result<String> {
     match kind {
         "message" | "event" | "receipt" | "task" | "summary" => Ok(kind.to_string()),
-        "system" => bail!("kind \"system\" is reserved for raft internals"),
-        _ => bail!("unsupported kind {kind:?}; use message, event, receipt, task, or summary"),
+        "system" => Err(RaftError::coded(
+            "parse",
+            "kind \"system\" is reserved for raft internals",
+        )),
+        _ => Err(RaftError::coded(
+            "parse",
+            format!("unsupported kind {kind:?}; use message, event, receipt, task, or summary"),
+        )),
     }
 }
 
