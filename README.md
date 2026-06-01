@@ -2,10 +2,10 @@
 
 [![CI](https://github.com/lemohammed/raft/actions/workflows/ci.yml/badge.svg)](https://github.com/lemohammed/raft/actions/workflows/ci.yml)
 
-`raft` is a small, filesystem-backed collaboration protocol for local agents.
-It gives agents a shared chat bus, presence, receipts, advisory needs-response
-markers, and bridge-friendly event messages using only ordinary OS primitives:
-directories, files, atomic rename, and process leases.
+`raft` is a local-first, filesystem-backed collaboration protocol for agents on
+one machine. It gives agents a shared chat bus, presence, receipts, advisory
+needs-response markers, and bridge-friendly event messages using only ordinary
+OS primitives: directories, files, atomic rename, and process leases.
 
 > **Note:** This is an agent-to-agent coordination bus. It is unrelated to the
 > Raft distributed-consensus algorithm.
@@ -464,12 +464,19 @@ same participant checks as `raft send`. The server validates `Host`
 on every request and requires same-origin `Origin` or `Referer` headers for
 POST writes.
 
-## Mesh (experimental): cryptographic identity
+## Mesh primitives (experimental)
 
-raft is growing a **mesh** layer that extends the local bus into a peer-to-peer
-agent network — cryptographic identity, capability tokens, and remote task
-delegation over an untrusted network. The full architecture (benchmarked against
-Letta and the Nous Hermes tool-call format) lives in
+The built product today is the local-first bus. The mesh work is deliberately
+experimental: identity, capability tokens, and remote task delegation are useful
+building blocks, but raft is not yet a general peer-to-peer coordination
+backplane. The local filesystem assumptions that make the bus simple and
+inspectable — atomic rename, local directory locks, and wall-clock leases — must
+not be stretched over NFS, SMB, cloud-sync folders, or a multi-host shared
+filesystem. A network transport has to replicate records and verify signatures;
+it cannot share the bus directory directly.
+
+The full architecture (benchmarked against Letta and the Nous Hermes tool-call
+format) lives in
 [`docs/superpowers/specs/2026-05-29-raft-mesh-remote-execution-design.md`](docs/superpowers/specs/2026-05-29-raft-mesh-remote-execution-design.md).
 
 The first piece is **identity**. Each agent can mint an Ed25519 keypair and a
@@ -522,6 +529,12 @@ denied check returns the stable `not_authorized` code. This is the opposite of
 the ambient, all-or-nothing credentials most agent runtimes inject into tool
 code; here authority is explicit, scoped, time-boxed, and delegable.
 
+There is no fine-grained revocation list in the current token format. Offline
+verification means a leaked token remains valid until its earliest
+`expires_at`; the emergency kill switch is rotating the issuing key, which also
+invalidates downstream authority from that key. Keep TTLs short for any token
+that could cross a trust boundary.
+
 ### Remote tasks
 
 The third piece is **delegation**. A task is an obligation-bearing message whose
@@ -552,6 +565,14 @@ Hermes body and worker/capability checks.
 `raft run` is the v1 executor loop. It verifies the embedded capability against
 the trusted root, runs registered tools with JSON arguments on stdin, and returns
 the result as a reply before writing a terminal `done` or `rejected` receipt.
+Before it runs a tool, the executor creates a durable single-execution claim
+under `conversations/<id>/executions/<task-id>/<worker>.json`. If the same task
+id is presented again — for example after a captured task is replayed or the
+receipt/result files are tampered with — the executor refuses to run the tool a
+second time. This is fail-closed: a crash after the claim but before the result,
+or tampering that removes the terminal receipt/result, may leave the task
+pending until it is cancelled and redispatched, but it will not repeat
+side-effectful execution.
 The built-in sandbox uses a scrubbed environment, a per-task scratch directory,
 a wall-clock timeout, and an output cap; it is not yet an OS-enforced container
 or microVM boundary. Captured stdout/stderr are also persisted as
@@ -563,10 +584,11 @@ includes both the artifact metadata and the log path in the result body.
 
 - **Protocol first**: the CLI and UI are clients of the same on-disk protocol;
   independent agents can implement the JSON file contract directly.
-- **No resource leaks**: commands are short-lived, locks have expirations, agent
-  heartbeats have TTLs, the monitor can archive old messages, `gc` reaps stale
-  locks and orphaned atomic-write temp files, and `doctor` exposes stale locks,
-  orphaned temp files, or runtime state without mutating the bus.
+- **Local-scale housekeeping**: commands are short-lived, locks have
+  expirations, agent heartbeats have TTLs, the monitor can archive old messages,
+  `gc` reaps stale locks and orphaned atomic-write temp files, and `doctor`
+  exposes stale locks, orphaned temp files, or runtime state without mutating
+  the bus.
 - **No spamming**: each channel or private chat has a rate window, a per-sender message
   cap, and a maximum message size.
 - **Append anytime**: any participant can send at any time; there is no
@@ -590,6 +612,10 @@ includes both the artifact metadata and the log path in the result body.
   updates.
 - **OS primitive compatible**: every state transition is a JSON file update
   protected by an atomic directory lock and committed via atomic rename.
+- **Small-team scale**: `inbox`, `awaiting`, `roster`, and `search` favor simple
+  inspectable directory scans over indexes. That is intentional for local
+  handful-of-agents coordination, but it bounds throughput and latency by
+  filesystem scan and sync costs rather than by a database scheduler.
 
 ## Output Contract (for agents)
 

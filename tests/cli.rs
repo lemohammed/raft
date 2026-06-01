@@ -1,6 +1,7 @@
 use std::fs;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -10581,6 +10582,231 @@ fn executor_persists_artifacts_and_task_log() {
     let log = fs::read_to_string(log_path).unwrap();
     assert!(log.contains(r#"[stdout] {"artifact":"hello"}"#));
     assert!(log.contains("[exit] 0"));
+}
+
+#[test]
+fn executor_refuses_to_replay_an_already_claimed_task() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(&bus, &["claim", "alice", "--workspace", "."]);
+    run(&bus, &["claim", "worker", "--workspace", "."]);
+    run(
+        &bus,
+        &[
+            "conversation",
+            "create",
+            "c",
+            "--participants",
+            "alice,worker",
+            "--starter",
+            "alice",
+        ],
+    );
+
+    let cap = bus.join("cap.json");
+    run(
+        &bus,
+        &[
+            "grant",
+            "new",
+            "--issuer",
+            "alice",
+            "--to",
+            "worker",
+            "--action",
+            "tool.run",
+            "--tool",
+            "count",
+            "--ttl",
+            "1h",
+            "--out",
+            cap.to_str().unwrap(),
+            "--json",
+        ],
+    );
+
+    let counter = bus.join("counter.txt");
+    fs::write(&counter, b"0\n").unwrap();
+    let tool = bus.join("count-tool.sh");
+    fs::write(
+        &tool,
+        format!(
+            "#!/bin/sh\ncount=$(cat '{}')\ncount=$((count + 1))\nprintf '%s\\n' \"$count\" > '{}'\nprintf '{{\"count\":%s}}\\n' \"$count\"\n",
+            counter.display(),
+            counter.display()
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&tool, fs::Permissions::from_mode(0o700)).unwrap();
+
+    let dispatch = run(
+        &bus,
+        &[
+            "task",
+            "dispatch",
+            "--from",
+            "alice",
+            "--to",
+            "worker",
+            "--conversation",
+            "c",
+            "--tool",
+            "count",
+            "--args",
+            "{}",
+            "--cap",
+            cap.to_str().unwrap(),
+            "--json",
+        ],
+    );
+    let task_id = serde_json::from_slice::<serde_json::Value>(&dispatch.stdout).unwrap()["task_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let tool_spec = format!("count={}", tool.display());
+
+    let first = run(
+        &bus,
+        &[
+            "run",
+            "worker",
+            "--once",
+            "--tool",
+            tool_spec.as_str(),
+            "--trust",
+            "alice",
+            "--json",
+        ],
+    );
+    let first_json: serde_json::Value = serde_json::from_slice(&first.stdout).unwrap();
+    assert_eq!(first_json["processed"], 1);
+    assert_eq!(fs::read_to_string(&counter).unwrap().trim(), "1");
+
+    fs::remove_dir_all(bus.join(format!("conversations/c/receipts/{task_id}"))).unwrap();
+    for entry in fs::read_dir(bus.join("conversations/c/messages")).unwrap() {
+        let path = entry.unwrap().path();
+        let message: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        if message["after"].as_str() == Some(task_id.as_str()) {
+            fs::remove_file(path).unwrap();
+        }
+    }
+
+    let replay = run(
+        &bus,
+        &[
+            "run",
+            "worker",
+            "--once",
+            "--tool",
+            tool_spec.as_str(),
+            "--trust",
+            "alice",
+            "--json",
+        ],
+    );
+    let replay_json: serde_json::Value = serde_json::from_slice(&replay.stdout).unwrap();
+    assert_eq!(replay_json["processed"], 0);
+    assert_eq!(fs::read_to_string(&counter).unwrap().trim(), "1");
+
+    let status = run(&bus, &["task", "status", &task_id, "--json"]);
+    let status_json: serde_json::Value = serde_json::from_slice(&status.stdout).unwrap();
+    assert_eq!(status_json["workers"][0]["status"], "pending");
+    assert_eq!(status_json["result"], serde_json::Value::Null);
+}
+
+#[test]
+fn doctor_flags_task_execution_claim_mismatches() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(&bus, &["claim", "alice", "--workspace", "."]);
+    run(&bus, &["claim", "worker", "--workspace", "."]);
+    run(
+        &bus,
+        &[
+            "conversation",
+            "create",
+            "c",
+            "--participants",
+            "alice,worker",
+            "--starter",
+            "alice",
+        ],
+    );
+
+    let cap = bus.join("cap.json");
+    run(
+        &bus,
+        &[
+            "grant",
+            "new",
+            "--issuer",
+            "alice",
+            "--to",
+            "worker",
+            "--action",
+            "tool.run",
+            "--tool",
+            "echo",
+            "--ttl",
+            "1h",
+            "--out",
+            cap.to_str().unwrap(),
+            "--json",
+        ],
+    );
+    let dispatch = run(
+        &bus,
+        &[
+            "task",
+            "dispatch",
+            "--from",
+            "alice",
+            "--to",
+            "worker",
+            "--conversation",
+            "c",
+            "--tool",
+            "echo",
+            "--args",
+            "{}",
+            "--cap",
+            cap.to_str().unwrap(),
+            "--json",
+        ],
+    );
+    let task_id = serde_json::from_slice::<serde_json::Value>(&dispatch.stdout).unwrap()["task_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    run(
+        &bus,
+        &[
+            "run",
+            "worker",
+            "--once",
+            "--tool",
+            "echo=/bin/cat",
+            "--trust",
+            "alice",
+            "--json",
+        ],
+    );
+
+    let claim_path = bus.join(format!("conversations/c/executions/{task_id}/worker.json"));
+    let mut claim: serde_json::Value =
+        serde_json::from_slice(&fs::read(&claim_path).unwrap()).unwrap();
+    claim["worker"] = serde_json::json!("ghost");
+    fs::write(&claim_path, serde_json::to_vec_pretty(&claim).unwrap()).unwrap();
+
+    let doctor = run_fail(&bus, &["doctor", "--json"]);
+    let report: serde_json::Value = serde_json::from_slice(&doctor.stdout).unwrap();
+    assert!(
+        report["issues"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|issue| issue["code"] == "task_execution_worker_mismatch")
+    );
 }
 
 #[test]

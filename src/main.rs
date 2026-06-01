@@ -29,9 +29,9 @@ use signal_hook::flag as signal_flag;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::env;
 use std::ffi::OsStr;
-use std::fs;
+use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process;
 use std::sync::Arc;
@@ -685,6 +685,9 @@ fn run_pending_tasks(
                 continue;
             }
         };
+        if !try_claim_task_execution(root, worker, &message, &body)? {
+            continue;
+        }
         // Authorization. A capability-bearing task is fully authorized against
         // the worker's runtime context; the worker must be the token's holder.
         if let Some(token) = &body.capability {
@@ -840,6 +843,54 @@ fn run_pending_tasks(
         processed += 1;
     }
     Ok(processed)
+}
+
+fn task_execution_claim_path(root: &Path, task: &Message, worker: &str) -> PathBuf {
+    root.join("conversations")
+        .join(&task.conversation_id)
+        .join("executions")
+        .join(&task.id)
+        .join(format!("{worker}.json"))
+}
+
+fn try_claim_task_execution(
+    root: &Path,
+    worker: &str,
+    task: &Message,
+    body: &task::TaskBody,
+) -> Result<bool> {
+    let path = task_execution_claim_path(root, task, worker);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+        set_dir_private(parent)?;
+    }
+    let claim = task::TaskExecutionClaim {
+        v: SCHEMA_VERSION,
+        task_id: task.id.clone(),
+        conversation_id: task.conversation_id.clone(),
+        worker: worker.to_string(),
+        tool: body.tool_call.name.clone(),
+        claimed_at: iso_now(),
+        message_hash: task.hash.clone(),
+    };
+    let mut file = match OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&path)
+    {
+        Ok(file) => file,
+        Err(err) if err.kind() == io::ErrorKind::AlreadyExists => return Ok(false),
+        Err(err) => return Err(err.into()),
+    };
+    serde_json::to_writer_pretty(&mut file, &claim)?;
+    file.write_all(b"\n")?;
+    file.sync_all()?;
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
+    if let Some(parent) = path.parent() {
+        fsync_dir(parent)?;
+    }
+    Ok(true)
 }
 
 fn persist_task_artifact(
@@ -5229,32 +5280,34 @@ fn archive_old_messages(_root: &Path, conv: &Path, meta: &Meta) -> Result<usize>
             target = archive_dir.join(format!("{}-{}.json", message.id, unique_token()));
         }
         fs::rename(entry.path(), &target)?;
-        archive_message_receipts(conv, &archive_dir, &message, &target)?;
+        archive_message_sidecar(conv, &archive_dir, &message, &target, "receipts")?;
+        archive_message_sidecar(conv, &archive_dir, &message, &target, "executions")?;
         archived += 1;
     }
     Ok(archived)
 }
 
-fn archive_message_receipts(
+fn archive_message_sidecar(
     conv: &Path,
     archive_dir: &Path,
     message: &Message,
     archived_message_path: &Path,
+    sidecar: &str,
 ) -> Result<()> {
-    let source = conv.join("receipts").join(&message.id);
+    let source = conv.join(sidecar).join(&message.id);
     if !source.exists() {
         return Ok(());
     }
-    let receipts_dir = archive_dir.join("receipts");
-    fs::create_dir_all(&receipts_dir)?;
-    set_dir_private(&receipts_dir)?;
+    let sidecar_dir = archive_dir.join(sidecar);
+    fs::create_dir_all(&sidecar_dir)?;
+    set_dir_private(&sidecar_dir)?;
     let stem = archived_message_path
         .file_stem()
         .and_then(OsStr::to_str)
         .ok_or_else(|| RaftError::new("invalid archived message path".to_string()))?;
-    let mut target = receipts_dir.join(stem);
+    let mut target = sidecar_dir.join(stem);
     if target.exists() {
-        target = receipts_dir.join(format!("{stem}-{}", unique_token()));
+        target = sidecar_dir.join(format!("{stem}-{}", unique_token()));
     }
     fs::rename(source, target)?;
     Ok(())

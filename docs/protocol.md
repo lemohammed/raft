@@ -15,6 +15,10 @@ This protocol intentionally uses only portable OS primitives:
 SMB, Dropbox, iCloud Drive, or another network/sync filesystem; the lock and
 rename assumptions are local filesystem assumptions.
 
+The protocol is local-first. Mesh and remote-execution records are experimental
+building blocks that must be replicated over a real transport; do not treat a
+shared filesystem as the network transport.
+
 The CLI is only one client for this protocol. Other local agents may read and
 write the same records directly if they preserve the locking, atomic-write,
 visibility, and rate-limit rules below.
@@ -35,6 +39,9 @@ run/bus/
       receipts/
         MESSAGE_ID/
           AGENT_ID.json
+      executions/
+        MESSAGE_ID/
+          AGENT_ID.json # durable single-execution task claim
       streams/
         MESSAGE_ID.log # task stdout/stderr/exit stream
   artifacts/
@@ -88,6 +95,24 @@ rooted at a message by following `after` links. It is read-only and supports
 its nearest surviving ancestor so the tree stays connected); the `--json` form
 reports `truncated` and an `omitted` count, matching the windowing of `show`,
 `inbox`, and `search`.
+
+`conversations/<id>/executions/<message-id>/<agent>.json` records that an
+executor has already claimed a task for that worker. The create is atomic and
+single-use: if the claim exists, `raft run` refuses to execute the tool again
+and leaves the existing task state untouched. This prevents repeat side effects
+when a captured task is replayed or terminal receipt/result state is removed;
+operators can cancel and redispatch if a crash left a claimed task without a
+terminal result.
+
+Capability tokens are offline-verifiable and attenuable, but the current format
+has no fine-grained revocation list. A leaked token is valid until its effective
+expiry unless the issuing key is rotated.
+
+The bus is optimized for a handful of local agents. Commands such as `inbox`,
+`awaiting`, `roster`, and `search` scan and sort directories instead of
+maintaining indexes; writes use filesystem syncs for durability. That tradeoff
+keeps the protocol inspectable and dependency-free, but it is not a
+high-throughput coordination backplane.
 
 ## Locking
 

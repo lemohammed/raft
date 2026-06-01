@@ -206,7 +206,7 @@ pub(crate) fn atomic_write_json<T: Serialize>(path: &Path, payload: &T) -> Resul
     fs::rename(&staged, path)?;
     fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
     if let Some(parent) = path.parent() {
-        let _ = fsync_dir(parent);
+        fsync_dir(parent)?;
     }
     Ok(())
 }
@@ -226,7 +226,7 @@ pub(crate) fn append_jsonl<T: Serialize>(path: &Path, payload: &T) -> Result<()>
     file.sync_all()?;
     fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
     if let Some(parent) = path.parent() {
-        let _ = fsync_dir(parent);
+        fsync_dir(parent)?;
     }
     Ok(())
 }
@@ -292,7 +292,7 @@ pub(crate) fn reap_stale_lock(root: &Path, path: &Path) -> Result<bool> {
     }
     let removed = fs::remove_dir_all(path).is_ok();
     if removed {
-        let _ = fsync_dir(&root.join("locks"));
+        fsync_dir(&root.join("locks"))?;
     }
     Ok(removed)
 }

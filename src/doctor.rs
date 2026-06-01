@@ -83,6 +83,7 @@ struct DoctorCounts {
     conversations: usize,
     messages: usize,
     receipts: usize,
+    task_execution_claims: usize,
     locks: usize,
     heartbeat_watchers: usize,
     watch_cursors: usize,
@@ -402,6 +403,7 @@ fn doctor_scan_conversations(
         }
         let message_ids = doctor_scan_messages(root, report, &conv, &meta);
         doctor_scan_receipts(root, report, &conv, &meta, &message_ids);
+        doctor_scan_task_executions(root, report, &conv, &meta, &message_ids);
     }
 }
 
@@ -903,6 +905,154 @@ fn doctor_scan_receipts(
             doctor_check_receipt(root, report, &path, meta, &message_id, &receipt);
         }
     }
+}
+
+fn doctor_scan_task_executions(
+    root: &Path,
+    report: &mut DoctorReport,
+    conv: &Path,
+    meta: &Meta,
+    message_ids: &BTreeSet<String>,
+) {
+    let executions = conv.join("executions");
+    if !executions.exists() {
+        return;
+    }
+    if !executions.is_dir() {
+        report.error(
+            root,
+            &executions,
+            "invalid_task_executions_dir",
+            "executions path is not a directory",
+        );
+        return;
+    }
+    doctor_check_dir_mode(root, &executions, report);
+    for task_claims in doctor_sorted_read_dir(root, &executions, report) {
+        let task_dir = task_claims.path();
+        if !task_dir.is_dir() {
+            continue;
+        }
+        doctor_check_dir_mode(root, &task_dir, report);
+        let task_id = task_dir
+            .file_name()
+            .and_then(OsStr::to_str)
+            .unwrap_or_default()
+            .to_string();
+        if let Err(err) = validate_id(&task_id, "task id") {
+            report.error(
+                root,
+                &task_dir,
+                "invalid_task_execution_id",
+                err.to_string(),
+            );
+        } else if !message_ids.contains(&task_id) {
+            report.error(
+                root,
+                &task_dir,
+                "orphan_task_execution",
+                format!("task execution claim references missing task {task_id:?}"),
+            );
+        }
+        for entry in doctor_sorted_read_dir(root, &task_dir, report) {
+            let path = entry.path();
+            if path.extension() != Some(OsStr::new("json")) {
+                continue;
+            }
+            report.counts.task_execution_claims += 1;
+            doctor_check_file_mode(root, &path, report);
+            let Some(claim) =
+                doctor_read_json::<crate::task::TaskExecutionClaim>(root, &path, report)
+            else {
+                continue;
+            };
+            doctor_check_task_execution(root, report, &path, meta, &task_id, &claim);
+        }
+    }
+}
+
+fn doctor_check_task_execution(
+    root: &Path,
+    report: &mut DoctorReport,
+    path: &Path,
+    meta: &Meta,
+    task_id: &str,
+    claim: &crate::task::TaskExecutionClaim,
+) {
+    doctor_check_schema(root, path, report, claim.v, "task execution claim");
+    if let Err(err) = validate_id(&claim.task_id, "task id") {
+        report.error(
+            root,
+            path,
+            "invalid_task_execution_task_id",
+            err.to_string(),
+        );
+    }
+    if claim.task_id != task_id {
+        report.error(
+            root,
+            path,
+            "task_execution_task_mismatch",
+            format!(
+                "claim is for {:?}, expected directory task {:?}",
+                claim.task_id, task_id
+            ),
+        );
+    }
+    if let Err(err) = validate_id(&claim.conversation_id, "conversation id") {
+        report.error(
+            root,
+            path,
+            "invalid_task_execution_conversation_id",
+            err.to_string(),
+        );
+    }
+    if claim.conversation_id != meta.id {
+        report.error(
+            root,
+            path,
+            "task_execution_conversation_mismatch",
+            format!(
+                "claim belongs to {:?}, expected {:?}",
+                claim.conversation_id, meta.id
+            ),
+        );
+    }
+    if let Some(stem) = doctor_file_stem(path)
+        && stem != claim.worker
+    {
+        report.error(
+            root,
+            path,
+            "task_execution_worker_mismatch",
+            format!(
+                "file name is {stem:?} but payload worker is {:?}",
+                claim.worker.as_str()
+            ),
+        );
+    }
+    if let Err(err) = validate_id(&claim.worker, "task execution worker") {
+        report.error(root, path, "invalid_task_execution_worker", err.to_string());
+    }
+    if !meta
+        .participants
+        .iter()
+        .any(|participant| participant == &claim.worker)
+    {
+        report.error(
+            root,
+            path,
+            "task_execution_worker_not_participant",
+            format!(
+                "task execution worker @{worker} is not a participant",
+                worker = claim.worker.as_str()
+            ),
+        );
+    }
+    if claim.tool.trim().is_empty() {
+        report.error(root, path, "empty_task_execution_tool", "tool is empty");
+    }
+    doctor_check_time(root, path, report, "claimed_at", &claim.claimed_at);
 }
 
 fn doctor_check_receipt(

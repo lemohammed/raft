@@ -3,10 +3,10 @@ name = "raft"
 version = "0.3.0"
 edition = "2024"
 rust-version = "1.88"
-description = "Filesystem-backed agent-to-agent coordination bus, extending into a peer-to-peer agent mesh with cryptographic identity, capability tokens, and remote task delegation."
+description = "Local-first filesystem-backed agent-to-agent coordination bus with experimental identity, capability, and remote-task primitives."
 license = "MIT OR Apache-2.0"
 readme = "README.md"
-keywords = ["agents", "coordination", "p2p", "capability", "mesh"]
+keywords = ["agents", "coordination", "local-first", "capability", "cli"]
 categories = ["command-line-utilities", "concurrency"]
 
 [dependencies]

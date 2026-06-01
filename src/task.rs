@@ -15,6 +15,7 @@
 
 use crate::capability::Token;
 use crate::error::{RaftError, Result};
+use crate::util::schema_v1;
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
 use std::path::Path;
@@ -77,6 +78,20 @@ pub(crate) struct TaskArtifact {
     pub(crate) hash: String,
     pub(crate) path: String,
     pub(crate) bytes: u64,
+}
+
+/// Durable single-execution marker for a task handled by a worker.
+#[derive(Serialize, Deserialize, Clone)]
+pub(crate) struct TaskExecutionClaim {
+    #[serde(rename = "_v", default = "schema_v1")]
+    pub(crate) v: u16,
+    pub(crate) task_id: String,
+    pub(crate) conversation_id: String,
+    pub(crate) worker: String,
+    pub(crate) tool: String,
+    pub(crate) claimed_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) message_hash: Option<String>,
 }
 
 impl TaskBody {

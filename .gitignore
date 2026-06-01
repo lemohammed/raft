@@ -6,6 +6,7 @@ __pycache__/
 target/
 .claude/
 run/bus/
+run/reviews/
 run/test-buses/
 run/*.pid
 text_*.json
