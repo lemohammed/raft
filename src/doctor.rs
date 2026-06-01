@@ -5,7 +5,8 @@ use crate::receipt_recipients;
 use crate::storage::{collect_orphan_temp_files, is_agent_record_file};
 use crate::types::{Agent, HeartbeatState, LockOwner, Message, Meta, Receipt, WatchState};
 use crate::util::{
-    parse_time, process_is_alive, validate_agent_state, validate_id, validate_subject_id,
+    parse_time, process_is_alive, validate_ack_status, validate_agent_state, validate_id,
+    validate_subject_id,
 };
 use crate::{MAX_SUMMARY_BYTES, SCHEMA_VERSION};
 use chrono::Utc;
@@ -983,6 +984,13 @@ fn doctor_check_receipt(
             path,
             "empty_receipt_status",
             "receipt status is empty",
+        );
+    } else if let Err(err) = validate_ack_status(&receipt.status) {
+        report.error(
+            root,
+            path,
+            "invalid_receipt_status",
+            format!("receipt status is invalid: {}", err.message),
         );
     }
     doctor_check_time(root, path, report, "updated_at", &receipt.updated_at);
