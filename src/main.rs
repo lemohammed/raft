@@ -2503,7 +2503,8 @@ pub(crate) fn send_message_locked(root: &Path, input: SendMessageInput) -> Resul
     // misreports who owes/awaits work. Reject loudly rather than silently strip,
     // so a misusing caller learns its mistake.
     if !is_obligation_kind(&kind) && (input.requires_ack || !needs_response_from.is_empty()) {
-        bail!(
+        bail_code!(
+            "parse",
             "--requires-ack and --needs-response-from are only valid on kind \"message\" or \"task\", not {kind:?}"
         );
     }

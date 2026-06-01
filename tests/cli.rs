@@ -2309,6 +2309,7 @@ fn event_kind_cannot_open_an_ask() {
         ],
     );
     let ack_err: serde_json::Value = serde_json::from_slice(&ack.stderr).unwrap();
+    assert_eq!(ack_err["error"]["code"], "parse");
     assert!(
         ack_err["error"]["message"]
             .as_str()
@@ -2336,6 +2337,7 @@ fn event_kind_cannot_open_an_ask() {
         ],
     );
     let needs_err: serde_json::Value = serde_json::from_slice(&needs.stderr).unwrap();
+    assert_eq!(needs_err["error"]["code"], "parse");
     assert!(
         needs_err["error"]["message"]
             .as_str()
