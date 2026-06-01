@@ -27,7 +27,7 @@ lint:
 	$(CARGO) clippy --locked --all-targets --all-features -- -D warnings
 
 doc:
-	$(CARGO) doc --locked --no-deps
+	RUSTDOCFLAGS="-D warnings" $(CARGO) doc --locked --no-deps
 
 fmt:
 	$(CARGO) fmt
