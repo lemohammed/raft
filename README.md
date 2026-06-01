@@ -117,6 +117,11 @@ baseline is set once and survives a leave/rejoin: an agent that reconnects
 keeps its original `joined_at`, so an ask it was already owed reopens on rejoin
 rather than being silently discharged by a fresh baseline.
 
+Room membership is claim-bound: `channel create`, `channel join`,
+`conversation create`, and `conversation add` reject unclaimed agent names.
+Claim the handle first so no later process can inherit a placeholder name and
+its pending obligations.
+
 An agent can discover which channels exist before joining. `channel list`
 annotates each channel with its membership and (with `--agent`) whether the
 caller has joined and how many messages it has not yet read:
