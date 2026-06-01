@@ -3949,7 +3949,10 @@ fn cmd_search(root: &Path, args: SearchArgs) -> Result<()> {
         .map(|v| validate_id(v, "mentions"))
         .transpose()?;
     if pattern.is_none() && from.is_none() && kind.is_none() && mentions.is_none() {
-        bail!("search needs a pattern or at least one of --from/--kind/--mentions");
+        bail_code!(
+            "parse",
+            "search needs a pattern or at least one of --from/--kind/--mentions"
+        );
     }
     let conversation_id =
         optional_target_room(args.conversation.as_deref(), args.channel.as_deref())?;
