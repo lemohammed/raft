@@ -669,6 +669,15 @@ fn doctor_check_message(
                     message.needs_response_from.len()
                 ),
             );
+        } else if let Some(worker) = message.needs_response_from.first()
+            && !message.to.iter().any(|recipient| recipient == worker)
+        {
+            report.error(
+                root,
+                path,
+                "task_worker_not_recipient",
+                format!("task worker @{worker} is not an explicit recipient"),
+            );
         }
         match crate::task::TaskBody::parse(&message.body) {
             Ok(body) => {
