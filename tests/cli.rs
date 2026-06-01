@@ -771,6 +771,23 @@ fn state_set_get_and_watch_state_changes_work() {
 }
 
 #[test]
+fn state_set_rejects_unknown_state_with_parse_code() {
+    let bus = temp_bus();
+    run(&bus, &["init"]);
+    run(&bus, &["claim", "alpha-agent", "--workspace", "."]);
+
+    let denied = run_fail(&bus, &["state", "set", "alpha-agent", "busy", "--json"]);
+    let err: serde_json::Value = serde_json::from_slice(&denied.stderr).unwrap();
+    assert_eq!(err["error"]["code"], "parse");
+    assert!(
+        err["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("invalid state")
+    );
+}
+
+#[test]
 fn state_get_flags_a_stale_agents_state_as_not_live() {
     let bus = temp_bus();
     run(&bus, &["init"]);

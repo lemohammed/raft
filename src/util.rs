@@ -31,7 +31,10 @@ pub(crate) fn sleep_interruptibly(duration: Duration, shutdown: &AtomicBool) {
 pub(crate) fn validate_agent_state(value: &str) -> Result<String> {
     match value {
         "idle" | "working" | "blocked" | "away" => Ok(value.to_string()),
-        _ => bail!("invalid state {value:?}; use idle, working, blocked, or away"),
+        _ => Err(RaftError::coded(
+            "parse",
+            format!("invalid state {value:?}; use idle, working, blocked, or away"),
+        )),
     }
 }
 
